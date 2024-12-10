@@ -1,0 +1,4 @@
+To activate the virtual environment do: source virtualenv_spintest/bin/activate
+Then, in the console run: jupyter notebook
+
+IMPORTAN! Do not change the names or folder structure

@@ -1,0 +1,213 @@
+---
+title: "Analysis.Neuropsico"
+output: 
+  html_document: 
+    toc: yes
+    number_sections: yes
+date: "2023-05-31"
+---
+# Set-up
+
+## Loading packages
+```{r install packages, warning=F,include=F}
+source("Scripts/RPackages/packages.R")
+```
+
+## Uploading DFs
+
+```{r uploading databases, include = F, warning=F}
+A.GMV_NPS_wide <- read_excel(path= "Data/neuropsychology/DF_GMV_NPS_wide.xlsx")
+```
+
+
+# Main analysis ________________________________________________________________
+
+## **Correlation between Attachment and GMV during pregnancy and postpartum**
+
+```{r}
+#% GMV decrease (ses 1 to 3) - Attachment at Session 3 =======================================
+lm_CV31_IntP3 <- cor.test(A.GMV_NPS_wide$MAAS_IntensityOfPreoccupation_3,A.GMV_NPS_wide$CortexVol_ref3_1,method="pearson",alternative="two.sided")
+summary_CV31_IntP3 <- c(lm_CV31_IntP3$estimate,lm_CV31_IntP3$conf.int,lm_CV31_IntP3$parameter, lm_CV31_IntP3$statistic, lm_CV31_IntP3$p.value)
+
+lm_CV31_AtQual3 <- cor.test(A.GMV_NPS_wide$MAAS_AttachmentQuality_3,A.GMV_NPS_wide$CortexVol_ref3_1,method="pearson",alternative="two.sided")
+summary_CV31_AtQual3 <- c(lm_CV31_AtQual3$estimate,lm_CV31_AtQual3$conf.int,lm_CV31_AtQual3$parameter, lm_CV31_AtQual3$statistic, lm_CV31_AtQual3$p.value)
+
+#% GMV decrease (ses 1 to 3) - Attachment at Session 5=======================================
+
+lm_CV31_AbsHost5 <- cor.test(A.GMV_NPS_wide$MPAS_AbsenceHostility_5,A.GMV_NPS_wide$CortexVol_ref3_1,method="pearson",alternative="two.sided")
+summary_CV31_AbsHost5 <- c(lm_CV31_AbsHost5$estimate,lm_CV31_AbsHost5$conf.int,lm_CV31_AbsHost5$parameter, lm_CV31_AbsHost5$statistic, lm_CV31_AbsHost5$p.value)
+
+lm_CV31_AtQual5 <- cor.test(A.GMV_NPS_wide$MPAS_AttachmentQuality_5,A.GMV_NPS_wide$CortexVol_ref3_1,method="pearson",alternative="two.sided")
+summary_CV31_AtQual5 <- c(lm_CV31_AtQual5$estimate,lm_CV31_AtQual5$conf.int,lm_CV31_AtQual5$parameter, lm_CV31_AtQual5$statistic, lm_CV31_AtQual5$p.value)
+
+lm_CV31_PlInt5 <- cor.test(A.GMV_NPS_wide$MPAS_PleasureInteraction_5,A.GMV_NPS_wide$CortexVol_ref3_1,method="pearson",alternative="two.sided")
+summary_CV31_PlInt5 <- c(lm_CV31_PlInt5$estimate,lm_CV31_PlInt5$conf.int,lm_CV31_PlInt5$parameter, lm_CV31_PlInt5$statistic, lm_CV31_PlInt5$p.value)
+
+#% GMV recovery (ses 3 to 5)- Attachment at Session 5=======================================
+
+lm_CV35_AbsHost5 <- cor.test(A.GMV_NPS_wide$MPAS_AbsenceHostility_5,A.GMV_NPS_wide$CortexVol_ref3_5,method="pearson",alternative="two.sided")
+summary_CV35_AbsHost5 <- c(lm_CV35_AbsHost5$estimate,lm_CV35_AbsHost5$conf.int,lm_CV35_AbsHost5$parameter, lm_CV35_AbsHost5$statistic, lm_CV35_AbsHost5$p.value)
+
+lm_CV35_AtQual5 <- cor.test(A.GMV_NPS_wide$MPAS_AttachmentQuality_5,A.GMV_NPS_wide$CortexVol_ref3_5,method="pearson",alternative="two.sided")
+summary_CV35_AtQual5 <- c(lm_CV35_AtQual5$estimate,lm_CV35_AtQual5$conf.int,lm_CV35_AtQual5$parameter, lm_CV35_AtQual5$statistic, lm_CV35_AtQual5$p.value)
+
+lm_CV35_PlInt5 <- cor.test(A.GMV_NPS_wide$MPAS_PleasureInteraction_5,A.GMV_NPS_wide$CortexVol_ref3_5,method="pearson",alternative="two.sided")
+summary_CV35_PlInt5 <- c(lm_CV35_PlInt5$estimate,lm_CV35_PlInt5$conf.int,lm_CV35_PlInt5$parameter, lm_CV35_PlInt5$statistic, lm_CV35_PlInt5$p.value)
+
+
+summary_complete <- as.data.frame(rbind(summary_CV31_IntP3,summary_CV31_AtQual3,summary_CV31_AbsHost5,summary_CV31_AtQual5,summary_CV31_PlInt5,summary_CV35_AbsHost5,summary_CV35_AtQual5,summary_CV35_PlInt5))
+
+colnames(summary_complete) <- c("R","CI 2.5%", "CI 97.5%","df", "t value", "p value")
+
+pvalues_brainneurops_adj <- p.adjust(summary_complete$`p value`, method="fdr", n=length(summary_complete$`p value`)) 
+
+summary_complete <- cbind(summary_complete,pvalues_brainneurops_adj)
+
+```
+
+### Final table
+
+```{r}
+rownames <- c("Antenatal Intensity of Preoccupation - % GM Volume Change (S1 to S3)",
+              "Antenatal Attachment Quality - % GM Volume Change (S1 to S3)",
+              "Postnatal Absence of Hostility - % GM Volume Change (S1 to S3)",
+              "Postnatal Attachment Quality - % GM Volume Change (S1 to S3)",
+              "Postnatal Pleasure in Interaction - % GM Volume Change (S1 to S3)",
+              "Postnatal Absence of Hostility - % GM Volume Change (S3 to S5)",
+              "Postnatal Attachment Quality -  % GM Volume Change (S3 to S5)",
+              "Postnatal Pleasure in Interaction - % GM Volume Change (S3 to S5)")
+
+summary_complete <- cbind(rownames, summary_complete) %>% add_column(Significance=NA)
+
+summary_complete <- summary_complete %>%
+  mutate(Significance = ifelse(pvalues_brainneurops_adj < 0.001, "***",
+                    ifelse(pvalues_brainneurops_adj  < 0.01, "**",
+                    ifelse(pvalues_brainneurops_adj  < 0.05, "*", "ns"))))
+
+colnames(summary_complete) <- c("_","R","CI 2.5%", "CI 97.5%","df", "t value", "p value", "q value","Sig.")
+
+
+custom_round <- function(x, column_name) {
+  if (grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.001, "< 0.001", format(round(x, 3))))
+  }
+  if (is.numeric(x) & !grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.005 & x > -0.005, format(round(x, 3)), format(round(x, 2))))
+  }
+  return(x)
+}
+ 
+summary_complete <- summary_complete %>% 
+  mutate(across(everything(), ~custom_round(.x, cur_column())))
+
+summary_complete %>% regulartable() %>% autofit()
+```
+
+### Correlation Plot
+
+```{r}
+# install.packages("scales")
+library(scales)
+corrplot_CV35_AbsHost5 <- ggplot(A.GMV_NPS_wide, aes(CortexVol_ref3_5, MPAS_AbsenceHostility_5)) +
+  geom_jitter(size=0.5, alpha=0.7) +
+  stat_smooth(method="lm",color="coral") +
+  #annotate("text",x = 9, y = 22, label= "R= 0.29, p.unc=0.0035,\np.fdr=0.038")+
+  ylab("Absence of Hostility") + xlab("% Gray Matter Volume Recovery")+
+  theme_modern()+
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.title.x = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))+
+  theme(axis.ticks = element_line())+
+  scale_y_continuous(breaks = breaks_pretty())
+corrplot_CV35_AbsHost5
+```
+
+## **Correlation Models with Mental Health Variables**
+
+```{r}
+wellbeing <- cor.test(A.GMV_NPS_wide$MPAS_AbsenceHostility_5, A.GMV_NPS_wide$Wellbeing_5, method = "pearson")
+wellbeing
+
+depression <- cor.test(A.GMV_NPS_wide$MPAS_AbsenceHostility_5, A.GMV_NPS_wide$Depression_5, method = "pearson")
+depression
+
+stress <- cor.test(A.GMV_NPS_wide$MPAS_AbsenceHostility_5, A.GMV_NPS_wide$Stress_5, method = "pearson")
+stress
+
+pvalues <- c(3.959e-09,0.001757,7.115e-06)
+pvalues_adjusted <- p.adjust(pvalues, method="fdr")
+pvalues_adjusted
+```
+
+##  **Mediation analysis**
+
+### Wellbeing
+
+```{r}
+fit.totaleffect <- lm(MPAS_AbsenceHostility_5~CortexVol_ref3_5,data=A.GMV_NPS_wide)
+summary(fit.totaleffect)
+
+fit.mediator <- lm(Wellbeing_5~CortexVol_ref3_5,data=A.GMV_NPS_wide)
+summary(fit.mediator)
+
+fit.mpas <- lm(MPAS_AbsenceHostility_5~ CortexVol_ref3_5 + Wellbeing_5,data=A.GMV_NPS_wide)
+summary(fit.mpas)
+```
+
+```{r}
+set.seed(1) #to make it reproducible
+mediation.results_w <- mediate(fit.mediator,fit.mpas, treat="CortexVol_ref3_5", mediator="Wellbeing_5", boot=T, sims=10000)
+summary(mediation.results_w)
+```
+
+### Stress
+```{r}
+fit.totaleffect <- lm(MPAS_AbsenceHostility_5~CortexVol_ref3_5,data=A.GMV_NPS_wide)
+summary(fit.totaleffect)
+
+fit.mediator <- lm(Stress_5~CortexVol_ref3_5,data=A.GMV_NPS_wide)
+summary(fit.mediator)
+
+fit.mpas <- lm(MPAS_AbsenceHostility_5~CortexVol_ref3_5 + Stress_5,data=A.GMV_NPS_wide)
+summary(fit.mpas)
+```
+
+```{r}
+set.seed(1) #to make it reproducible
+mediation.results_s <- mediate(fit.mediator,fit.mpas, treat="CortexVol_ref3_5", mediator="Stress_5", boot=T,sims=10000)
+summary(mediation.results_s)
+```
+
+### Depression
+
+```{r}
+fit.totaleffect <- lm(MPAS_AbsenceHostility_5~CortexVol_ref3_5,data=A.GMV_NPS_wide)
+summary(fit.totaleffect)
+
+fit.mediator <- lm(Depression_5~CortexVol_ref3_5,data=A.GMV_NPS_wide)
+summary(fit.mediator)
+
+fit.mpas <- lm(MPAS_AbsenceHostility_5~CortexVol_ref3_5 + Depression_5,data=A.GMV_NPS_wide)
+summary(fit.mpas)
+```
+
+```{r}
+set.seed(1) #to make it reproducible
+mediation.results_d <- mediate(fit.mediator,fit.mpas, treat="CortexVol_ref3_5", mediator="Depression_5", boot=T, sims=10000)
+summary(mediation.results_d)
+```
+
+#### FDR correction
+
+```{r}
+pvaues_ACME <- c(0.0020,0.0440,0.1662)
+pvaues_ADE <- c(0.0876, 0.0144,0.0048)
+pvaues_TE <- c(0.0018,0.0018,0.0016)
+pvaues_mediation <- c(0.0026,0.0446, 0.1666)
+
+round(p.adjust(pvaues_ACME,method = "fdr"),3)
+round(p.adjust(pvaues_ADE,method = "fdr"),3)
+round(p.adjust(pvaues_TE,method = "fdr"),3)
+round(p.adjust(pvaues_mediation,method = "fdr"),3)
+```
+

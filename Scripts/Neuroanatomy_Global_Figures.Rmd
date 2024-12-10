@@ -1,0 +1,318 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Set-up
+
+## Uploading packages
+
+```{r install, warning=F, include=F}
+env <- new.env() # Create a new environment
+source("Scripts/RPackages/packages.R", local = env) # Load the packages into the new environment
+
+loaded_packages <- ls(envir = env) # Get the list of loaded packages in the new environment
+
+invisible(lapply(loaded_packages, function(pkg) { # Load the packages that are not already loaded into the global environment
+  if (!(pkg %in% search())) {
+    library(pkg, character.only = TRUE)
+  }
+}))
+```
+
+```{r clear environment first, include=F}
+remove(list=ls())
+```
+
+## Uploading DFs
+
+```{r uploading df,include=F,warning=F}
+cortvolume <- read_excel("Data/neuroanatomy_global/DF_GlobalCorticalMetrics.xlsx") #open project first
+networks <- read_excel("Data/neuroanatomy_global/DF_GlobalNetworkMetrics_GestMoms.xlsx")  #open project first
+
+spintest_data <- read_feather("Data/spin-test/yeo_spin_test_data.feather")
+spintest_pvalues <- read_feather("Data/spin-test/yeo_spin_test_pvalues.feather")
+```
+
+
+```{r,include=F,warning=F}
+#CORTICAL VOLUME================================================================
+cortvolume$Group <- factor(cortvolume$Group, levels=c("nulliparous_women","gestational_mother","non_gestational_mother")) #setting nulliparous women as the baseline level
+#NETWORKS ======================================================================
+networks$Group <- factor(networks$Group, levels=c("nulliparous_women","gestational_mother","non_gestational_mother")) #setting nulliparous women as the baseline level
+```
+
+## PLOTS - % Change GMV .......................................................
+
+```{r include = F}
+cortvolume$Session1 <- c(-1, 18, 34, 43, 63)[match(cortvolume$Session, c(1, 2, 3, 4, 5))] #This is just to adapt the plots to the real distance between sessions
+filtered_data <- cortvolume[cortvolume$Session1 %in% c(18, 34, 43, 63), ]
+custom_labels <- c("Pre-Pregnancy","18 pregnancy\nweeks","34 pregnancy\nweeks", "1 month\npostpartum","6 months\npostpartum")
+custom_braks <- c(-1, 18, 34, 43, 63)
+```
+
+### Cortical Volume Trajectory by group
+
+```{r Figure 1-A}
+#fig.height=10, fig.width=12
+Volume_plot <- ggplot(data = cortvolume, aes(x = Session1, y = PChange.Cortvol.Global, color = Group)) +
+  geom_rect(aes(xmin = 0, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray90", color = "white", alpha = 0.01) +
+  geom_jitter(data = filtered_data, aes(x = Session1), size = 2.3, alpha=0.3) + #alpha = 0.2
+  stat_summary(geom = "errorbar", fun.data = mean_cl_normal, width = 1, size = 1) +
+  stat_summary(geom = "line", fun.data = mean_cl_normal, size = 1, lineend = "round") + #alpha = 0.7
+  stat_summary(geom = "point", fun.data = mean_cl_normal, size = 2.3) + #alpha = 1
+  scale_x_continuous(breaks = c(-1, 18, 34, 43, 63), labels = custom_labels) +
+  scale_fill_brewer(palette = "Set2", labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  scale_color_brewer(palette = "Set2",labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  labs(y = "% Cortical Gray Matter Volume Change") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(size = 0.5, color = "black")) +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(axis.title.y = element_text(size=7)) + #22
+  theme(axis.text=element_text(size=7))+ #19
+  theme(axis.ticks = element_line())+
+  theme(
+    legend.position = c(.27, .20),
+    legend.justification = c("right", "top"),
+    legend.box.just = "right",
+    legend.margin = margin(6, 6, 6, 6),
+    legend.text = element_text(size=7) #12
+    )+
+  guides(fill=F,color=F)
+
+Volume_plot
+```
+
+### Cortical Thickness Trajectory by group
+
+```{r Figure S2-A}
+#fig.height=10, fig.width=12
+Thickness_plot <- ggplot(data = cortvolume, aes(x = Session1, y = PChange.Thickness.Global, color = Group)) +
+  geom_rect(aes(xmin = 0, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray90", color = "white", alpha = 0.01) +
+  geom_jitter(data = filtered_data, aes(x = Session1), size = 2.3, alpha=0.3) + #alpha = 0.2
+  stat_summary(geom = "errorbar", fun.data = mean_cl_normal, width = 1, size = 1) +
+  stat_summary(geom = "line", fun.data = mean_cl_normal, size = 1, lineend = "round") + #alpha = 0.7
+  stat_summary(geom = "point", fun.data = mean_cl_normal, size = 2.3) + #alpha = 1
+  scale_x_continuous(breaks = c(-1, 18, 34, 43, 63), labels = custom_labels) +
+  scale_fill_brewer(palette = "Set2", labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  scale_color_brewer(palette = "Set2",labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  labs(y = "% Cortical Thickness Change") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(size = 0.5, color = "black")) +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))+
+  theme(axis.ticks = element_line())+
+  theme(
+    legend.position = c(.27, .20),
+    legend.justification = c("right", "top"),
+    legend.box.just = "right",
+    legend.margin = margin(6, 6, 6, 6),
+    legend.text = element_text(size=7)
+    )+
+  guides(fill=F,color=F)
+
+Thickness_plot
+```
+
+### Surface Area Trajectory by group
+
+```{r Figure S3-A}
+#fig.height=10, fig.width=12
+Area_plot <- ggplot(data = cortvolume, aes(x = Session1, y = PChange.area.Global, color = Group)) +
+  geom_rect(aes(xmin = 0, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.01) +
+  geom_jitter(data = filtered_data, aes(x = Session1), size = 2.3, alpha=0.3) + #alpha = 0.2
+  stat_summary(geom = "errorbar", fun.data = mean_cl_normal, width = 1, size = 1) +
+  stat_summary(geom = "line", fun.data = mean_cl_normal, size = 1, lineend = "round") + #alpha = 0.7
+  stat_summary(geom = "point", fun.data = mean_cl_normal, size = 2.3) + #alpha = 1
+  scale_x_continuous(breaks = c(-1, 18, 34, 43, 63), labels = custom_labels) +
+  scale_fill_brewer(palette = "Set2", labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  scale_color_brewer(palette = "Set2",labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  labs(y = "% Surface Area Change") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(size = 0.5, color = "black")) +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))+
+  theme(axis.ticks = element_line())+
+  guides(fill=F,color=F)
+
+Area_plot
+```
+
+### Cerebral white matter volume
+
+```{r Figure S5-A}
+#fig.height=10, fig.width=12
+WM_plot <- ggplot(data = cortvolume, aes(x = Session1, y = PChange.WMvol.Global, color = Group)) +
+  geom_rect(aes(xmin = 0, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.01) +
+  geom_jitter(data = filtered_data, aes(x = Session1), size = 2.3, alpha=0.3) + #alpha = 0.2
+  stat_summary(geom = "errorbar", fun.data = mean_cl_normal, width = 1, size = 1) +
+  stat_summary(geom = "line", fun.data = mean_cl_normal, size = 1, lineend = "round") + #alpha = 0.7
+  stat_summary(geom = "point", fun.data = mean_cl_normal, size = 2.3) + #alpha = 1
+  scale_x_continuous(breaks = c(-1, 18, 34, 43, 63), labels = custom_labels) +
+  scale_fill_brewer(palette = "Set2", labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  scale_color_brewer(palette = "Set2",labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  labs(y = "% Cerebral White Matter Volume Change") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(size = 0.5, color = "black")) +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))+
+  theme(axis.ticks = element_line())+
+  guides(fill=F,color=F)
+
+WM_plot
+```
+
+### CSF 
+
+```{r Figure S5-B}
+#fig.height=10, fig.width=12
+CSF_plot <- ggplot(data = cortvolume, aes(x = Session1, y = PChange.CSF, color = Group)) +
+  geom_rect(aes(xmin = 0, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.01) +
+ geom_jitter(data = filtered_data, aes(x = Session1), size = 2.3, alpha=0.3) + #alpha = 0.2
+  stat_summary(geom = "errorbar", fun.data = mean_cl_normal, width = 1, size = 1) +
+  stat_summary(geom = "line", fun.data = mean_cl_normal, size = 1, lineend = "round") + #alpha = 0.7
+  stat_summary(geom = "point", fun.data = mean_cl_normal, size = 2.3) + #alpha = 1
+  scale_x_continuous(breaks = c(-1, 18, 34, 43, 63), labels = custom_labels) +
+  scale_fill_brewer(palette = "Set2", labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  scale_color_brewer(palette = "Set2",labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  labs(y = "% Cerebrospinal Fluid Change") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(size = 0.5, color = "black")) +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))+
+  theme(axis.ticks = element_line())+
+  guides(fill=F,color=F)
+
+CSF_plot
+```
+
+## PLOTS - % Change GMV by Network.............................................
+
+```{r trajectory plots by hemisphere}
+meanchange.df <- networks %>%
+  group_by(Session,Group,Network) %>%
+  summarise(PChange.GMV_mean = round(mean(PChange.GMV.mean),2),
+            PChange.GMV_sd = sd(PChange.GMV.mean)) %>%
+  filter(Group == "gestational_mother")
+
+meanchange.df$Session1 <- c(-1, 18, 34, 43, 63)[match(meanchange.df$Session, c(1, 2, 3, 4, 5))] #adjust to real means
+custom_braks <- c(-1, 18, 34, 43, 63)
+```
+
+```{r Figure S2-B}
+#fig.height=10, fig.width=12
+meanchange.df$Network <- factor(meanchange.df$Network,levels=c("visual","somatosensor","dorsalattention","ventralattention","limbic","frontopar","default"))
+
+volume_net_plot <- ggplot(data=meanchange.df,aes(x=Session1,y=PChange.GMV_mean,group = Network ,colour=Network)) +
+  geom_rect(aes(xmin = 0, xmax = 40, ymin =-Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.01) +
+  geom_line(size=1,lineend = "round", alpha=0.7) +
+  scale_color_manual(values=c("#7A1289","#4785B8","#00780E","#C83BFF","#C9E775","#EB9723","#D13F50"), name = "Yeo Networks", labels = c("Visual/nNetwork", "Somato-motor/nNetwork", "Dorsal Attention/nNetwork","Ventral Attention/nNetwork", "Limbic/nNetwork", "Frontoparietal/nNetwork","Default Mode/nNetwork")) +
+  xlab("Timeline") +
+  scale_x_continuous(breaks = c(-1, 18, 34, 43, 63), labels=custom_labels) +
+  labs(y = "% Cortical Gray Matter Volume Change") +
+  theme_classic()+
+  theme(axis.title.x = element_blank(), legend.title = element_blank(),legend.position="none")+
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))
+volume_net_plot
+```
+
+## PLOTS - Spin Test...........................................................
+
+### functions
+
+```{r}
+custom_round <- function(x, column_name) {
+  if (grepl("p.adj", column_name)) {
+    return(ifelse(x < 0.001, "< 0.001", format(round(x, 3))))
+  } else if (is.numeric(x)) {
+    return(ifelse(abs(x) < 0.005, format(round(x, 3)), format(round(x, 2))))
+  }
+  return(x)
+}
+```
+
+```{r}
+spintest_data_volume_peta <- spintest_data %>% filter(metric=="volume" & map_metric == "unthresholded_petasq_T2GM" & parcel_name != "medial_wall")
+
+spintest_data_volume_peta$parcel_name <- factor(spintest_data_volume_peta$parcel_name, levels=c("visual","somatomotor","dorsal_attention","ventral_attention","limbic","fronto_parietal","default_mode"),ordered=T)
+```
+
+```{r}
+stat.test_volume <- spintest_data_volume_peta %>%
+  group_by(parcel_name) %>%
+  t_test(map_value ~ 1) 
+
+spintest_pvalues$parcel_name <- factor(spintest_pvalues$parcel_name, levels=c("visual","somatomotor","dorsal_attention","ventral_attention","limbic","fronto_parietal","default_mode"),ordered=T)
+
+spintest_pvalues_volume_positive <- spintest_pvalues %>% filter(metric=="volume" & map_metric == "unthresholded_petasq_T2GM" & parcel_name != "medial_wall",tail=="positive") %>% arrange(parcel_name)
+
+spintest_pvalues_volume_negative <- spintest_pvalues %>% filter(metric=="volume" & map_metric == "unthresholded_petasq_T2GM" & parcel_name != "medial_wall",tail=="negative") %>% arrange(parcel_name)
+
+stat.test_volume_positive <- stat.test_volume
+stat.test_volume_negative <- stat.test_volume
+
+stat.test_volume_positive$p.adj <- spintest_pvalues_volume_positive$p_value
+stat.test_volume_negative$p.adj <- spintest_pvalues_volume_negative$p_value
+
+
+annotate_results <- function(df) {
+  df %>%
+    mutate(across(everything(), ~custom_round(.x, cur_column()))) %>%
+    mutate(p.adj.signif = case_when(
+      p.adj <= 0.001 ~ "****", 
+      p.adj <= 0.01 ~ "***", 
+      p.adj <= 0.05 ~ "**", 
+      TRUE ~ "ns")) %>%
+    mutate(p.adj = paste0("p=", p.adj)) %>%
+    add_xy_position(x = "parcel_name", step.increase = 0.06)
+}
+
+stat.test_volume_positive <- annotate_results(stat.test_volume_positive)
+stat.test_volume_negative <- annotate_results(stat.test_volume_negative)
+
+stat.test_volume_negative$y.position[stat.test_volume_negative$parcel_name=="limbic"] <- 0.095
+stat.test_volume_positive$y.position[stat.test_volume_positive$parcel_name=="default_mode"] <- 0.095
+stat.test_volume_positive$y.position[stat.test_volume_positive$parcel_name=="fronto_parietal"] <- 0.095
+# stat.test_volume_positive$p.adj.signif[stat.test_volume_positive$parcel_name=="fronto_parietal"] <- "*"
+```
+
+```{r Figure 2-D}
+#fig.height=10, fig.width=25
+specific_values <- spintest_data_volume_peta %>% filter(rotation=="original") %>% select(parcel_name, map_value) %>% arrange(parcel_name)
+
+spintest_volume_plot <- ggplot(spintest_data_volume_peta, aes(x = parcel_name, y = map_value, fill = parcel_name)) +
+  geom_violin(trim = FALSE) +
+  geom_boxplot(width = 0.05, color = "black", fill = "white", outlier.shape = NA) +
+  scale_fill_manual(values = c("#7A1289", "#4785B8", "#00780E", "#C83BFF", "#C9E775", "#EB9723", "#D13F50"), name = "Yeo Networks") +
+  geom_segment(aes(x = 0.8, xend = 1.2, y = specific_values$map_value[1] , yend = specific_values$map_value[1] ), color = "black",size=1) +
+  geom_segment(aes(x = 1.8, xend = 2.2, y = specific_values$map_value[2] , yend = specific_values$map_value[2] ), color = "black",size=1) +
+  geom_segment(aes(x = 2.8, xend = 3.2, y = specific_values$map_value[3] , yend = specific_values$map_value[3] ), color = "black",size=1) +
+  geom_segment(aes(x = 3.8, xend = 4.2, y = specific_values$map_value[4] , yend = specific_values$map_value[4] ), color = "black",size=1) +
+  geom_segment(aes(x = 4.8, xend = 5.2, y = specific_values$map_value[5] , yend = specific_values$map_value[5] ), color = "black",size=1) +
+  geom_segment(aes(x = 5.8, xend = 6.2, y = specific_values$map_value[6] , yend = specific_values$map_value[6] ), color = "black",size=1) +
+  geom_segment(aes(x = 6.8, xend = 7.2, y = specific_values$map_value[7] , yend = specific_values$map_value[7] ), color = "black",size=1) +
+  # stat_pvalue_manual(stat.test_volume_positive, label="p.adj", tip.length = 0.01, hide.ns = T,size=5)+
+  # stat_pvalue_manual(stat.test_volume_negative, label="p.adj", tip.length = 0.01, hide.ns = T,size=5)+
+  ylab("Signed effect sizes")+
+  scale_x_discrete(name = "Yeo Networks", labels = c("Visual\nNetwork", "Somatomotor\nNetwork", "Dorsal Attention\nNetwork", "Ventral Attention\nNetwork", "Limbic\nNetwork", "Frontoparietal\nNetwork", "Default Mode\nNetwork")) +
+  scale_y_continuous(limits = c(0, 0.1), breaks = seq(0, 0.1, by = 0.02)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey")+
+  theme_classic() +
+  theme(axis.title.x = element_blank(),legend.title = element_blank(), legend.position = "none") +
+  theme(axis.title.y = element_text(size=7)) + #30
+  theme(axis.text=element_text(size=7))
+
+spintest_volume_plot
+```

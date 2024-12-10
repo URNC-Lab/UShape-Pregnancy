@@ -1,0 +1,964 @@
+---
+title: "STRUCTURAL_PAPER"
+output:
+  html_document:
+    highlight: tango
+    theme: paper
+    fig_width: 10
+    number_sections: yes
+    toc: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+date: "2023-08-01"
+theme: united
+---
+# Set-up
+
+## Uploading packages
+
+```{r install, warning=F, include=F}
+env <- new.env() # Create a new environment
+source("Scripts/RPackages/packages.R", local = env) # Load the packages into the new environment
+
+loaded_packages <- ls(envir = env) # Get the list of loaded packages in the new environment
+
+invisible(lapply(loaded_packages, function(pkg) { # Load the packages that are not already loaded into the global environment
+  if (!(pkg %in% search())) {
+    library(pkg, character.only = TRUE)
+  }
+}))
+```
+
+```{r clear environment first, include=F}
+remove(list=ls())
+```
+
+## Uploading DFs
+
+```{r uploading df,include=F,warning=F}
+cortvolume <- read_excel("Data/neuroanatomy_global/DF_GlobalCorticalMetrics.xlsx") #open project first
+networks <- read_excel("Data/neuroanatomy_global/DF_GlobalNetworkMetrics_GestMoms.xlsx")  #open project first
+```
+
+```{r uploading df,include=F,warning=F}
+#CORTICAL VOLUME================================================================
+cortvolume$Group <- factor(cortvolume$Group, levels=c("nulliparous_women","gestational_mother","non_gestational_mother")) #setting nulliparous women as the baseline level
+#NETWORKS ======================================================================
+networks$Group <- factor(networks$Group, levels=c("nulliparous_women","gestational_mother","non_gestational_mother")) #setting nulliparous women as the baseline level
+```
+
+## Custom functions
+
+```{r custom functions used to round values in the results tables}
+custom_round_a <- function(x, column_name) {
+  if (grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.001, format(x, scientific = TRUE, digits = 3), format(round(x, 3))))
+  }
+  if (is.numeric(x) & !grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.005 & x > -0.005, format(round(x, 3)), format(round(x, 2))))
+  }
+  return(x)
+}
+
+# custom_round_a <- function(x, column_name) {
+#   if (grepl("p value|q value", column_name)) {
+#     return(ifelse(x < 0.001, "< 0.001", format(round(x, 3))))
+#   }
+#   if (is.numeric(x) & !grepl("p value|q value", column_name)) {
+#     return(ifelse(x < 0.005 & x > -0.005, format(round(x, 3)), format(round(x, 2))))
+#   }
+#   return(x)
+# }
+
+custom_round_b <- function(x) {
+  if (grepl("Pr", cur_column())) {
+    return(ifelse(x < 0.001, format(x, scientific = TRUE, digits = 3), format(round(x, 3))))
+  }
+  if (is.numeric(x)) {
+    return(round(x, 2))
+  }
+  return(x)
+}
+
+custom_round_c <- function(x) {
+  if (is.numeric(x)) {
+    return(round(x, 1))
+  }
+  return(x)
+}
+
+
+custom_round_d <- function(x) {
+  if (grepl("Pr|p value|p.adj", cur_column()) & !grepl("p.adj.signif", cur_column())) {
+    return(ifelse(x < 0.001, format(x, scientific = TRUE, digits = 3), format(round(x, 3))))
+  }
+  if (is.numeric(x)) {
+    return(round(x, 2))
+  }
+  return(x)
+}
+
+```
+
+## Checking covariables
+
+### Age
+
+```{r age df}
+Age_Check <- cortvolume %>%
+  filter(Session == 1) %>%
+  select(Identity, Group, Age)
+
+Age_Check %>%
+  select(Group,Age) %>%
+  group_by(Group) %>%
+  summarise_at(vars(Age), list(M = mean, SD = sd),na.rm = T,) %>%
+  kable(., caption = "Age by groups") %>%
+  kable_styling(latex_options = c("striped", "scale_down"))
+
+
+Age_aov <- aov(Age~Group, data = Age_Check)
+summary(Age_aov) #significant differences
+
+tuckey_age <- tukey_hsd(Age_aov) #group comparison
+tuckey_age <- tuckey_age %>% 
+  mutate(across(everything(), custom_round_d))
+
+tuckey_age %>% regulartable()
+```
+
+### eTIV
+
+```{r estimating eTIV differences between groups in session 1}
+eTIV_aov <- aov(eTIV ~ Group, data = cortvolume %>% filter(Session == 1))
+summary(eTIV_aov) #non-significant differences
+```
+
+### Time difference between sessions
+
+```{r creating diftime df}
+#Testing differences between groups at time-interval between sessions
+cortvolume$Session <- as.factor(cortvolume$Session)
+
+timedif_lmer <- lmer(diftime.RM ~ Group*Session + (1|Identity), data=cortvolume)
+timedif_lmer_summary <- as.data.frame(summary(timedif_lmer)$coefficients)
+
+timedif_lmer_summary <- timedif_lmer_summary %>% 
+  mutate(across(everything(), custom_round_d))
+
+timedif_lmer_summary <- cbind(rownames(timedif_lmer_summary),timedif_lmer_summary)
+timedif_lmer_summary %>% regulartable() #significant differences between the time difference ses-1 to ses-2.
+
+emeans_timedif <- emmeans(timedif_lmer, pairwise ~ Group|Session) 
+emeans_timedif
+```
+
+```{r order, include=F}
+cortvolume <- cortvolume[with(cortvolume, order(Identity, Session)),]
+networks <- networks[with(networks, order(Identity, Session)),]
+```
+
+# Main analysis ________________________________________________________________
+
+## Sample Size
+
+```{r final sample size}
+table.trajstudy <- as.data.frame(with(cortvolume %>% filter(Session==1),table(Group))) %>%
+   mutate(Group = factor(Group, levels = c("nulliparous_women", "gestational_mother", "non_gestational_mother")),
+          cumulative = cumsum(Freq),
+          midpoint = cumulative - Freq / 2,
+          label = paste0(round(Freq / sum(Freq) * 100, 1), "%"))
+
+tab_long <- kable(table.trajstudy, caption = "Sample Size U-Shape Study Sessions 1-3-4") %>%
+  kable_styling("striped")
+tab_long
+
+table.trajstudy <- as.data.frame(with(cortvolume %>% filter(Session==2),table(Group))) %>%
+   mutate(Group = factor(Group, levels = c("nulliparous_women", "gestational_mother", "non_gestational_mother")),
+          cumulative = cumsum(Freq),
+          midpoint = cumulative - Freq / 2,
+          label = paste0(round(Freq / sum(Freq) * 100, 1), "%"))
+
+tab_long <- kable(table.trajstudy, caption = "Sample Size U-Shape Study Session 2") %>%
+  kable_styling("striped")
+tab_long
+
+table.trajstudy <- as.data.frame(with(cortvolume %>% filter(Session==5),table(Group))) %>%
+   mutate(Group = factor(Group, levels = c("nulliparous_women", "gestational_mother", "non_gestational_mother")),
+          cumulative = cumsum(Freq),
+          midpoint = cumulative - Freq / 2,
+          label = paste0(round(Freq / sum(Freq) * 100, 1), "%"))
+
+tab_long <- kable(table.trajstudy, caption = "Sample Size U-Shape Study Session 5") %>%
+  kable_styling("striped")
+tab_long
+```
+
+## Session as numeric
+
+```{r cortvolume as numeric, include=F}
+cortvolume$Session <- as.numeric(cortvolume$Session)
+```
+
+## **GMV - Thickness - Area differences at Session 1**
+
+```{r}
+GMdif_1 <- aov(CortexVol ~ Group, data=cortvolume %>% filter(Session == 1))
+summary(GMdif_1)
+etaSquared(GMdif_1, anova = T)
+
+Thicknessdif_1 <- aov(GlobalThickness ~ Group, data=cortvolume %>% filter(Session == 1))
+summary(Thicknessdif_1)
+etaSquared(Thicknessdif_1, anova = T)
+
+Areadif_1 <- aov(Globalarea ~ Group, data=cortvolume %>% filter(Session == 1))
+summary(Areadif_1)
+etaSquared(Areadif_1, anova = T)
+```
+
+## **Global Analyses on Cortical Volume + Cortical Thickness + Surface Area** 
+
+- Linear mixed effects model.
+- P-values have been corrected by metric (volume, thickness and area) using FDR.
+
+```{r}
+lmer.global.quad_vol <- lmer(CortexVol ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = T)
+
+lmer.global.quad_thck <- lmer(GlobalThickness ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = T)
+
+lmer.global.quad_area <- lmer(Globalarea ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = T)
+
+# Extract p-values from each model
+p_values_vol <- summary(lmer.global.quad_vol)$coefficients[, "Pr(>|t|)"]
+p_values_thick <- summary(lmer.global.quad_thck)$coefficients[, "Pr(>|t|)"]
+p_values_area <- summary(lmer.global.quad_area)$coefficients[, "Pr(>|t|)"]
+
+# Combine p-values into a matrix
+p_values_matrix <- cbind(p_values_vol, p_values_thick, p_values_area)
+
+# Apply FDR correction row-wise
+p_values_corrected <- apply(p_values_matrix, 1, p.adjust, method = "fdr")
+
+p_values_corrected <- as.data.frame(t(p_values_corrected))
+colnames(p_values_corrected) <- paste0(colnames(p_values_corrected), "_corrected")
+```
+
+```{r}
+lmer.global.quad_vol_table <- summary(lmer.global.quad_vol)$coefficients
+lmer.global.quad_thck_table <- summary(lmer.global.quad_thck)$coefficients
+lmer.global.quad_area_table <- summary(lmer.global.quad_area)$coefficients
+
+confint_vol <- confint(lmer.global.quad_vol,level = 0.95)
+confint_thick <- confint(lmer.global.quad_thck,level = 0.95)
+confint_area <- confint(lmer.global.quad_area,level = 0.95)
+
+rownames <- c("(Intercept)","Group [Gestational Mother]","Group [non-Gestational Mother]","Session [Linear Term]","Session [Quadratic Term]","eTIV","Age","Euler Number","Inter-Session Time","Group [Gestational Mother] x Session [Linear Term]","Group [non-Gestational Mother] x Session [Linear Term]","Group [Gestational Mother] x Session [Quadratic Term]","Group [non-Gestational Mother] x Session [Quadratic Term]")
+
+lmer.global.quad_vol_table <- as.data.frame(cbind(rownames,lmer.global.quad_vol_table,confint_vol[3:nrow(confint_vol),],p_values_corrected[,"p_values_vol_corrected"]))
+lmer.global.quad_thck_table <- as.data.frame(cbind(rownames,lmer.global.quad_thck_table,confint_thick[3:nrow(confint_thick),],p_values_corrected[,"p_values_thick_corrected"]))
+lmer.global.quad_area_table <- as.data.frame(cbind(rownames,lmer.global.quad_area_table,confint_area[3:nrow(confint_area),], p_values_corrected[,"p_values_area_corrected"]))
+
+
+lmer.global.quad_vol_table <- lmer.global.quad_vol_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)","V9") %>% add_column(Significance = NA)
+lmer.global.quad_thck_table <- lmer.global.quad_thck_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)","V9") %>% add_column(Significance = NA)
+lmer.global.quad_area_table <- lmer.global.quad_area_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)","V9") %>% add_column(Significance = NA)
+
+colnames(lmer.global.quad_vol_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value", "q value","Sig.")
+colnames(lmer.global.quad_thck_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value", "q value","Sig.")
+colnames(lmer.global.quad_area_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value", "q value","Sig.")
+
+lmer.global.quad_vol_table <- lmer.global.quad_vol_table %>% mutate(across(-c("_"),as.numeric))
+lmer.global.quad_vol_table <- lmer.global.quad_vol_table %>%
+  mutate(`Sig.` = ifelse(`q value` < 0.001, "***",
+                    ifelse(`q value`  < 0.01, "**",
+                    ifelse(`q value`  < 0.05, "*", "ns"))))
+
+lmer.global.quad_thck_table <- lmer.global.quad_thck_table %>% mutate(across(-c("_"),as.numeric))
+lmer.global.quad_thck_table <- lmer.global.quad_thck_table %>%
+  mutate(`Sig.` = ifelse(`q value` < 0.001, "***",
+                    ifelse(`q value`  < 0.01, "**",
+                    ifelse(`q value`  < 0.05, "*", "ns"))))
+
+lmer.global.quad_area_table <- lmer.global.quad_area_table %>% mutate(across(-c("_"),as.numeric))
+lmer.global.quad_area_table <- lmer.global.quad_area_table %>%
+  mutate(`Sig.` = ifelse(`q value` < 0.001, "***",
+                    ifelse(`q value`  < 0.01, "**",
+                    ifelse(`q value`  < 0.05, "*", "ns"))))
+
+lmer.global.quad_vol_table <- lmer.global.quad_vol_table %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+
+lmer.global.quad_thck_table <- lmer.global.quad_thck_table %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+
+lmer.global.quad_area_table <- lmer.global.quad_area_table %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+```
+
+### LMER TABLES (GMV, CT, SA)
+
+```{r}
+lmer.global.quad_vol_table %>% regulartable() %>% autofit()
+lmer.global.quad_thck_table %>% regulartable() %>% autofit()
+lmer.global.quad_area_table %>% regulartable() %>% autofit()
+```
+
+## **Influence of BMI changes during pregnancy and postpartum**
+
+```{r BMI as covariable}
+cortvolume$BMI_scaled <- scale(cortvolume$BMI)
+
+lmer.global.quad_BMI <- lmer(CortexVol ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + BMI_scaled +(1|Identity), data=cortvolume, REML = T)
+```
+
+```{r BMI model table}
+lmer.global.quad_BMI_table <- summary(lmer.global.quad_BMI)$coefficients
+
+confint_BMI <- confint(lmer.global.quad_BMI,level = 0.95)
+
+rownames <- c("(Intercept)","Group [Gestational Mother]","Group [non-Gestational Mother]","Session [Linear Term]","Session [Quadratic Term]","eTIV","Age","Euler Number","Inter-Session Time","BMI","Group [Gestational Mother] x Session [Linear Term]","Group [non-Gestational Mother] x Session [Linear Term]","Group [Gestational Mother] x Session [Quadratic Term]","Group [non-Gestational Mother] x Session [Quadratic Term]")
+
+lmer.global.quad_BMI_table <- as.data.frame(cbind(rownames,lmer.global.quad_BMI_table,confint_BMI[3:nrow(confint_BMI),]))
+
+lmer.global.quad_BMI_table <- lmer.global.quad_BMI_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+colnames(lmer.global.quad_BMI_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value","Sig.")
+
+lmer.global.quad_BMI_table <- lmer.global.quad_BMI_table %>% mutate(across(-c("_"),as.numeric))
+lmer.global.quad_BMI_table <- lmer.global.quad_BMI_table %>%
+  mutate(`Sig.` = ifelse(`p value` < 0.001, "***",
+                    ifelse(`p value`  < 0.01, "**",
+                    ifelse(`p value`  < 0.05, "*", "ns")))) %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+
+lmer.global.quad_BMI_table %>% regulartable() %>% autofit()
+```
+
+## **Analysis of variance (linear vs. quadratic model)**
+
+### Volume
+
+```{r volume anova include=F}
+lmer.global.volume.quad_remlF <- lmer(CortexVol~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+lmer.global.volume.lin_remlF <- lmer(CortexVol~ Group*Session + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+```
+
+```{r volume anova table}
+anova_volume_global <- anova(lmer.global.volume.quad_remlF,lmer.global.volume.lin_remlF)
+
+anova_volume_global <- anova_volume_global %>% 
+  mutate(across(everything(), custom_round_b))
+
+rownames <- c("Model A. Linear Model", "Model B. Quadratic Model")
+
+anova_volume_global <- cbind(rownames, anova_volume_global)
+
+anova_volume_global %>% regulartable() %>% autofit()
+```
+
+### Cortical Thickness - EXTRA
+
+```{r thickness anova, include=F}
+lmer.global.thick.quad_remlF <- lmer(GlobalThickness~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+lmer.global.thick.lin_remlF <- lmer(GlobalThickness~ Group*Session + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+```
+
+```{r thickness anova table}
+anova(lmer.global.thick.quad_remlF,lmer.global.thick.lin_remlF)
+```
+
+### Surface Area - EXTRA
+
+```{r area anova, include=F}
+lmer.global.area.quad_remlF <- lmer(Globalarea~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+lmer.global.area.lin_remlF <- lmer(Globalarea~ Group*Session + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+```
+
+```{r  analysis of variance with REML F models area}
+anova(lmer.global.area.quad_remlF,lmer.global.area.lin_remlF)
+```
+
+## **Checking eTIV added as triple interaction**
+
+```{r}
+lmer.global.quad_etiv <- lmer(CortexVol~ Group*poly(Session,2)*etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = T)
+```
+
+```{r}
+lmer.global.quad_etiv_table <- summary(lmer.global.quad_etiv)$coefficients
+
+confint_etiv <- confint(lmer.global.quad_etiv,level = 0.95)
+
+rownames <- c("(Intercept)","Group [Gestational Mother]","Group [non-Gestational Mother]","Session [Linear Term]","Session [Quadratic Term]","eTIV","Age","Euler Number","Inter-Session Time","Group [Gestational Mother] x Session [Linear Term]","Group [non-Gestational Mother] x Session [Linear Term]","Group [Gestational Mother] x Session [Quadratic Term]","Group [non-Gestational Mother] x Session [Quadratic Term]", "Group [Gestational Mother] x eTIV","Group [non-Gestational Mother] x eTIV", "Session [Linear Term] x eTIV","Session [Quadratic Term] x eTIV", "Group [Gestational Mother] x Session [Linear Term] x eTIV","Group [non-Gestational Mother] x Session [Linear Term] x eTIV","Group [Gestational Mother] x Session [Quadratic Term] x eTIV","Group [non-Gestational Mother] x Session [Quadratic Term] x eTIV")
+
+
+lmer.global.quad_etiv_table <- as.data.frame(cbind(rownames,lmer.global.quad_etiv_table,confint_etiv[3:nrow(confint_etiv),]))
+
+lmer.global.quad_etiv_table <- lmer.global.quad_etiv_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+colnames(lmer.global.quad_etiv_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value","Sig.")
+
+lmer.global.quad_etiv_table <- lmer.global.quad_etiv_table %>% mutate(across(-c("_"),as.numeric))
+lmer.global.quad_etiv_table <- lmer.global.quad_etiv_table %>%
+  mutate(`Sig.` = ifelse(`p value` < 0.001, "***",
+                    ifelse(`p value`  < 0.01, "**",
+                    ifelse(`p value`  < 0.05, "*", "ns")))) %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+
+lmer.global.quad_etiv_table %>% regulartable() %>% autofit()
+```
+
+### anova (quadratic vs triple interaction)
+
+```{r}
+lmer.global.volume.quad_etiv <- lmer(CortexVol~ Group*poly(Session,2)*etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+```
+
+```{r volume anova table}
+anova_volume_etiv <- anova(lmer.global.volume.quad_remlF,lmer.global.volume.quad_etiv)
+
+anova_volume_etiv <- anova_volume_etiv %>% 
+  mutate(across(everything(), custom_round_b))
+
+rownames <- c("Model A. Quadratic Model", "Model B. Triple interaction eTIV Model")
+
+anova_volume_etiv <- cbind(rownames, anova_volume_etiv)
+
+anova_volume_etiv %>% regulartable() %>% autofit()
+```
+
+## **GAM model**
+
+```{r gam model}
+cortvolume_gam <- cortvolume
+cortvolume_gam$Session <- as.numeric(cortvolume_gam$Session) #important
+cortvolume_gam$Identity <- as.factor(cortvolume_gam$Identity) #important
+
+gam.model.volume <- mgcv::gam(CortexVol ~ Group + s(Session, by = Group, k=3) + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + s(Identity, bs = "re"), data=cortvolume_gam,method = 'REML')
+
+summary(gam.model.volume)
+```
+
+### Comparison with lmer model - EXTRA
+
+```{r}
+BIC(gam.model.volume)
+BIC(lmer.global.volume.quad_remlF)
+```
+
+### GAM model plot
+
+```{r gam model plots, fig.height=10, fig.width=12}
+p_obj <- plot(gam.model.volume, residuals = T)
+
+p_obj_2 <- p_obj[[2]] # gestational mothers
+sm_df_2 <- as.data.frame(p_obj_2[c("x", "se", "fit")]) 
+sm_df_2 <- sm_df_2 %>% add_column(Group="gestational_mother")
+data_df_2 <- as.data.frame(p_obj_2[c("raw", "p.resid")])
+data_df_2 <- data_df_2 %>% add_column(Group="gestational_mother")
+
+data_df_2$raw <- factor(data_df_2$raw,levels=c("1","2","3","4","5"))
+
+gam_plot <- ggplot(sm_df_2, aes(x = x, y = fit)) +
+  geom_rug(data = data_df_2, mapping = aes(x = raw, y = NULL),
+           sides = "b") +
+  geom_jitter(data = data_df_2, mapping = aes(x = raw, y = p.resid) ,color = c("#FC8D62")) +
+  geom_ribbon(aes(ymin = fit - se, ymax = fit + se, y = NULL),
+              alpha = 0.3) +
+  geom_line() +
+  labs(x = p_obj$xlab, y = "Smooth function for Session in Gestational Mothers") +
+  scale_x_discrete(name = "Raw", labels = c("Pre-Pregnancy","18 pregnancy/nweeks","34 pregnancy/nweeks", "1 month/npostpartum","6 months/npostpartum")) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(size = 0.5, color = "black")) +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  theme(axis.title.y = element_text(size=22)) +
+  theme(axis.text=element_text(size=22))+
+  theme(axis.ticks = element_line())+
+  guides(fill=F,color=F)
+
+gam_plot
+```
+
+## **Percentage of Change by Session**
+
+### % GM volume change to baseline
+
+```{r}
+meanPChange <- cortvolume %>%
+  filter(Session %in% c(2,3,4,5)) %>%
+  group_by(Group,Session) %>%
+  summarize(meanPChange = mean(PChange.Cortvol.Global),
+            lowerCI = meanPChange - qt(0.95, df = n() - 1) * (sd(PChange.Cortvol.Global) / sqrt(n())),
+            upperCI = meanPChange + qt(0.95, df = n() - 1) * (sd(PChange.Cortvol.Global) / sqrt(n())))
+
+meanPChange_kable <- kable(meanPChange) %>% kable_styling("striped")
+meanPChange_kable
+
+meanPChange <- meanPChange %>% 
+  mutate(across(everything(), custom_round_c))
+
+meanPChange_GM <- meanPChange %>% filter(Group == "gestational_mother") %>% ungroup() %>% select(-Group) %>% mutate(Session = case_when(. == 2 ~ "Baseline to 18 pregnancy weeks", . == 3 ~ "Baseline to 32 pregnancy weeks", . == 4 ~ "Baseline to 1 month postpartum", . == 5 ~ "Baseline to 6 month postpartum"))
+
+colnames(meanPChange_GM) <- c("Time Interval","% GMV Change", "CI 2.5%", "CI 97.5%")
+
+meanPChange_GM
+```
+
+### % GM volume Recovery 3 to 5
+
+```{r Confidence Interval recovery}
+ci_recovery <- cortvolume %>% filter(Group == "gestational_mother") %>% select(Identity,Session,PChange.Cortvol.Global)
+
+ci_recovery_wide <- ci_recovery %>%
+  mutate(across(-c(Identity,Session), as.numeric)) %>%
+  pivot_wider(id_cols = c(Identity), names_from = Session, values_from = -c(Identity,Session))
+
+ci_recovery_wide$diff <-ci_recovery_wide$`5` - ci_recovery_wide$`3`
+
+mean_recovery <- mean(ci_recovery_wide$diff,na.rm=T)
+mean_recovery
+
+lowerCI <- mean_recovery - qt(0.95, df = length(ci_recovery_wide$diff) - 1) * (sd(ci_recovery_wide$diff,na.rm=T) / sqrt(length(ci_recovery_wide$diff)))
+lowerCI
+
+upperCI <- mean_recovery + qt(0.95, df = length(ci_recovery_wide$diff) - 1) * (sd(ci_recovery_wide$diff,na.rm=T) / sqrt(length(ci_recovery_wide$diff)))
+upperCI
+```
+
+## **Gestational Mothers - Differences from baseline to six months pp**
+
+```{r}
+cortvolume$Session <- as.factor(cortvolume$Session)
+
+lm.global.gest.1vs5 <- lmer(CortexVol ~ Session + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume %>% filter(Session %in% c(1,5)) %>% filter(Group=="gestational_mother"))
+summary(lm.global.gest.1vs5)
+
+summary.lm.global.gest.1vs5 <- as.data.frame(summary(lm.global.gest.1vs5)$coefficients)
+confint.lm.global.gest.1vs5 <- confint(lm.global.gest.1vs5,level = 0.95)
+
+rownames <- c("(Intercept)","Session" ,"eTIV","Age","Euler Number","Inter-Session Time")
+
+summary.lm.global.gest.1vs5 <- cbind(rownames, summary.lm.global.gest.1vs5,confint.lm.global.gest.1vs5[3:nrow(confint.lm.global.gest.1vs5),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary.lm.global.gest.1vs5 <- summary.lm.global.gest.1vs5 %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary.lm.global.gest.1vs5) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value","p value", "Sig.")
+
+summary.lm.global.gest.1vs5 <- summary.lm.global.gest.1vs5 %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary.lm.global.gest.1vs5 %>% regulartable() %>% autofit() 
+```
+
+## **Group differences at Session 5**
+
+```{r warning=F}
+cortvolume_difS15 <- cortvolume %>% filter(Session %in% c(1,5))
+cortvolume_difS15$Group <- factor(cortvolume_difS15$Group, levels=c("gestational_mother","non_gestational_mother","nulliparous_women"))
+
+lmer.global.1vs5 <- lmer(CortexVol ~ Session*Group + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume_difS15)
+summary(lmer.global.1vs5)
+
+# Table ========================================================================
+summary.lmer.global.1vs5 <- as.data.frame(summary(lmer.global.1vs5)$coefficients)
+confint.lmer.global.1vs5 <- confint(lmer.global.1vs5,level = 0.95)
+
+rownames <- c("(Intercept)","Session [5]","Group [non-gestational mothers]", "Group [nulliparous women]" ,"eTIV","Age","Euler Number","Inter-Session Time", "Session [5] x Group [non-gestational mothers]","Session [5] x Group [nulliparous women]")
+
+summary.lmer.global.1vs5 <- cbind(rownames, summary.lmer.global.1vs5,confint.lmer.global.1vs5[3:nrow(confint.lmer.global.1vs5),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary.lmer.global.1vs5 <- summary.lmer.global.1vs5 %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary.lmer.global.1vs5) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df","t value","p value", "Sig.")
+
+summary.lmer.global.1vs5 <- summary.lmer.global.1vs5 %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary.lmer.global.1vs5 %>% regulartable %>% autofit
+```
+
+## **Variability U-Shape**
+
+```{r}
+gmv_gm <- cortvolume %>% filter(Group=="gestational_mother")
+gmv_gm$CortexVol <- as.numeric(gmv_gm$CortexVol)
+gmv_gm$Session <- as.numeric(gmv_gm$Session)
+
+#Volume
+gmv_lmer <- lmer(CortexVol ~ (poly(Session,2)|Identity), data=gmv_gm)
+rancoef_gmv <- (ranef(gmv_lmer)$Identity) #*-1 #random coefficient gmv
+
+variability_plot_volume <- ggplot(rancoef_gmv, aes(x=`poly(Session, 2)2`)) + 
+    geom_histogram(color="coral",fill="coral") +
+  geom_vline(aes(xintercept=mean(`poly(Session, 2)2`)),color="black", linetype="dashed", size=1) +
+  theme_modern() +
+  labs(x = "Individual quadratic effect")+
+  theme(axis.title.x = element_text(size=7),axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))
+variability_plot_volume
+
+#Thickness
+thick_lmer <- lmer(GlobalThickness ~ (poly(Session,2)|Identity), data=gmv_gm)
+rancoef_thick <- (ranef(thick_lmer)$Identity) #*-1 #random coefficient gmv
+
+variability_plot_thickness <-ggplot(rancoef_thick, aes(x=`poly(Session, 2)2`)) +
+    geom_histogram(color="coral",fill="coral") +
+  geom_vline(aes(xintercept=mean(`poly(Session, 2)2`)),color="black", linetype="dashed", size=1) +
+  theme_modern()+
+  labs(x = "Individual quadratic effect")+
+  theme(axis.title.x = element_text(size=7),axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))
+variability_plot_thickness
+#Area
+area_lmer <- lmer(Globalarea ~ (poly(Session,2)|Identity), data=gmv_gm)
+rancoef_area <- (ranef(area_lmer)$Identity) #*-1 #random coefficient gmv
+
+variability_plot_area <- ggplot(rancoef_area, aes(x=`poly(Session, 2)2`)) +
+  geom_histogram(color="coral",fill="coral") +
+  geom_vline(aes(xintercept=mean(`poly(Session, 2)2`)),color="black", linetype="dashed", size=1) +
+  theme_modern()+
+  labs(x = "Individual quadratic effect")+
+  theme(axis.title.x = element_text(size=7),axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))
+variability_plot_area
+```
+
+## **Effect of "situational" factors**
+
+```{r}
+cortvolume_gm <- cortvolume %>%
+  filter(Group=="gestational_mother")
+
+cortvolume_gm$Session <- as.numeric(cortvolume_gm$Session)
+```
+
+### Assisted Reproduction
+
+```{r}
+cortvolume$Session <- as.numeric(cortvolume$Session)
+lmer_AssistedRepr <- lmer(CortexVol~poly(Session,2)*AssistedRepr + (1|Identity), data=cortvolume_gm)
+summary_AR <- as.data.frame(summary(lmer_AssistedRepr)$coefficients)
+
+rownames <- c("(Intercept)","Session [Linear Term]","Session [Quadratic Term]","Assisted Reproduction [Yes]", "Session [Linear Term] x Assisted Reproduction [Yes]", "Session [Quadratic Term] x Assisted Reproduction [Yes]")
+
+confint_AR <- confint(lmer_AssistedRepr,level = 0.95)
+
+summary_AR <- cbind(rownames, summary_AR,confint_AR[3:nrow(confint_AR),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary_AR <- summary_AR %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary_AR) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value", "Sig.")
+
+summary_AR <- summary_AR %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary_AR %>% regulartable() %>% autofit()
+```
+
+### Baby Biological Sex
+
+```{r}
+lmer_biologicalsex <- lmer(CortexVol~poly(Session,2)*Baby.BiologicalSex + (1|Identity), data=cortvolume_gm)
+
+summary_BioS <- as.data.frame(summary(lmer_biologicalsex)$coefficients)
+summary_BioS
+
+rownames <- c("(Intercept)","Session [Linear Term]","Session [Quadratic Term]","Biological Sex [Male]", "Session [Linear Term] x Biological Sex [Male]", "Session [Quadratic Term] x Biological Sex [Male]")
+
+confint_BioS <- confint(lmer_biologicalsex,level = 0.95)
+
+summary_BioS <- cbind(rownames, summary_BioS,confint_BioS[3:nrow(confint_BioS),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary_BioS <- summary_BioS %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary_BioS) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value", "Sig.")
+
+summary_BioS <- summary_BioS %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary_BioS %>% regulartable() %>% autofit()
+```
+
+### Parturition Type
+
+```{r}
+cortvolume_gm$ParturitionType <- factor(cortvolume_gm$ParturitionType, levels=c("Vaginal delivery","Scheduled c-section","Unplanned c-section"))
+
+lmer_parturitiontype <- lmer(CortexVol ~ Session*ParturitionType + (1|Identity), data=cortvolume_gm %>% filter(Session %in% c(3,4,5)))
+
+summary_PT <- as.data.frame(summary(lmer_parturitiontype)$coefficients)
+summary_PT
+
+rownames <- c("(Intercept)","Session","Parturition Type [Scheduled C-Section]","Parturition Type [Unplanned C-Section]","Session x Parturition Type [Scheduled C-Section]","Session x Parturition Type [Unplanned C-Section]")
+
+confint_PT <- confint(lmer_parturitiontype,level = 0.95)
+
+summary_PT <- cbind(rownames, summary_PT,confint_PT[3:nrow(confint_PT),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary_PT <- summary_PT %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary_PT) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE","df","t value", "p value", "Sig.")
+
+summary_PT <- summary_PT %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary_PT %>% regulartable() %>% autofit()
+```
+
+### Breastfeeding
+
+```{r}
+cortvolume_gm$BreastFeed.Act <- factor(cortvolume_gm$BreastFeed.Act, levels=c("No breastfeeding","Exclusive breastfeeding","Mixed breastfeeding"))
+
+lmer_breastfeeding <- lmer(CortexVol ~ Session*BreastFeed.Act + (1|Identity), data=cortvolume_gm %>% filter(Session %in% c(3,4,5)))
+
+summary_BF <- as.data.frame(summary(lmer_breastfeeding)$coefficients)
+summary_BF
+
+rownames <- c("(Intercept)","Session","Breastfeeding Type [Exclusive Breastfeeding]","Breastfeeding Type [Mixed Breastfeeding]","Session x Breastfeeding Type [Exclusive Breastfeeding]","Session x Breastfeeding Type [Mixed Breastfeeding]")
+
+confint_BF <- confint(lmer_breastfeeding,level = 0.95)
+
+summary_BF <- cbind(rownames, summary_BF,confint_BF[3:nrow(confint_BF),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary_BF <- summary_BF %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary_BF) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE","df","t value", "p value", "Sig.")
+
+summary_BF <- summary_BF %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary_BF %>% regulartable() %>% autofit()
+```
+
+## **Changes in White matter Volume + CSF**
+
+- Linear mixed effects model.
+- P-values have been corrected by metric (CSF, thickness and area) using FDR.
+
+```{r}
+cortvolume$Session <- as.numeric(cortvolume$Session)
+
+lmer.global.quad_WM <- lmer(CerebralWhiteMatterVol ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = T)
+
+lmer.global.quad_CSF <- lmer(CSF ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = T)
+
+# Extract p-values from each model
+p_values_WM <- summary(lmer.global.quad_WM)$coefficients[, "Pr(>|t|)"]
+p_values_CSF <- summary(lmer.global.quad_CSF)$coefficients[, "Pr(>|t|)"]
+# Combine p-values into a matrix
+p_values_matrix <- cbind(p_values_WM,p_values_CSF) 
+                         
+# Apply FDR correction row-wise
+p_values_corrected <- apply(p_values_matrix, 1, p.adjust, method = "fdr")
+
+p_values_corrected <- as.data.frame(t(p_values_corrected))
+colnames(p_values_corrected) <- paste0(colnames(p_values_corrected), "_corrected")
+```
+
+```{r}
+lmer.global.quad_WM_table <- summary(lmer.global.quad_WM)$coefficients
+lmer.global.quad_CSF_table <- summary(lmer.global.quad_CSF)$coefficients
+
+confint_WM <- confint(lmer.global.quad_WM,level = 0.95)
+confint_CSF <- confint(lmer.global.quad_CSF,level = 0.95)
+
+rownames <- c("(Intercept)","Group [Gestational Mother]","Group [non-Gestational Mother]","Session [Linear Term]","Session [Quadratic Term]","eTIV","Age","Euler Number","Inter-Session Time","Group [Gestational Mother] x Session [Linear Term]","Group [non-Gestational Mother] x Session [Linear Term]","Group [Gestational Mother] x Session [Quadratic Term]","Group [non-Gestational Mother] x Session [Quadratic Term]")
+
+lmer.global.quad_WM_table <- as.data.frame(cbind(rownames,lmer.global.quad_WM_table,confint_WM[3:nrow(confint_WM),],p_values_corrected[,"p_values_WM_corrected"]))
+lmer.global.quad_CSF_table <- as.data.frame(cbind(rownames,lmer.global.quad_CSF_table,confint_CSF[3:nrow(confint_CSF),],p_values_corrected[,"p_values_CSF_corrected"]))
+
+lmer.global.quad_WM_table <- lmer.global.quad_WM_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)","V9") %>% add_column(Significance = NA)
+lmer.global.quad_CSF_table <- lmer.global.quad_CSF_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)","V9") %>% add_column(Significance = NA)
+
+colnames(lmer.global.quad_WM_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value", "q value","Sig.")
+colnames(lmer.global.quad_CSF_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value", "q value","Sig.")
+
+lmer.global.quad_WM_table <- lmer.global.quad_WM_table %>% mutate(across(-c("_"),as.numeric))
+lmer.global.quad_WM_table <- lmer.global.quad_WM_table %>%
+  mutate(`Sig.` = ifelse(`q value` < 0.001, "***",
+                    ifelse(`q value`  < 0.01, "**",
+                    ifelse(`q value`  < 0.05, "*", "ns"))))%>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+
+lmer.global.quad_CSF_table <- lmer.global.quad_CSF_table %>% mutate(across(-c("_"),as.numeric))
+lmer.global.quad_CSF_table <- lmer.global.quad_CSF_table %>%
+  mutate(`Sig.` = ifelse(`q value` < 0.001, "***",
+                    ifelse(`q value`  < 0.01, "**",
+                    ifelse(`q value`  < 0.05, "*", "ns")))) %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+```
+
+### LMER TABLES (CSF,WM, SA)
+
+```{r}
+lmer.global.quad_WM_table %>% regulartable() %>% autofit()
+lmer.global.quad_CSF_table %>% regulartable() %>% autofit()
+```
+
+## **Analysis of variance (linear vs. quadratic model)**
+
+### WM
+
+```{r WM anova include=F}
+lmer.WM.quad_remlF <- lmer(CerebralWhiteMatterVol ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+lmer.WM.lin_remlF <- lmer(CerebralWhiteMatterVol ~ Group*Session + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+```
+
+```{r wm anova table}
+anova_WM_global <- anova(lmer.WM.quad_remlF,lmer.WM.lin_remlF)
+
+anova_WM_global <- anova_WM_global %>% 
+  mutate(across(everything(), custom_round_b))
+
+rownames <- c("Model A. Linear Model", "Model B. Quadratic Model")
+
+anova_WM_global <- cbind(rownames, anova_WM_global)
+
+anova_WM_global %>% regulartable() %>% autofit()
+```
+
+### CSF
+
+```{r CSF anova include=F}
+lmer.CSF.quad_remlF <- lmer(CSF ~ Group*poly(Session,2)  + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+lmer.CSF.lin_remlF <- lmer(CSF ~ Group*Session + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1|Identity), data=cortvolume, REML = F)
+```
+
+```{r CSF anova table}
+anova_CSF_global <- anova(lmer.CSF.quad_remlF,lmer.CSF.lin_remlF)
+
+anova_CSF_global <- anova_CSF_global %>% 
+  mutate(across(everything(), custom_round_b))
+
+rownames <- c("Model A. Linear Model", "Model B. Quadratic Model")
+
+anova_CSF_global <- cbind(rownames, anova_CSF_global)
+
+anova_CSF_global %>% regulartable() %>% autofit()
+```
+
+## **Networks Analysis**
+
+- Exclusively for **Gestational Mothers and GMV**
+
+```{r}
+networks$Network <- factor(networks$Network,levels=c("visual","somatosensor","dorsalattention","ventralattention","limbic","frontopar","default"))
+networks$Grouped.Net <- factor(networks$Grouped.Net,levels=c("Other","HigherOrder"))
+networks$Session <- as.numeric(networks$Session)
+```
+
+### Nested Mixed Effects Model
+
+- 1st Model: A **single trajectory** for all networks.
+
+- 2nd Model: **2 different trajectories** (Higher Order Networks).
+
+#### Global Change
+
+```{r warning = F}
+lmer.singletraj_global <- lmer(GMV.mean ~ poly(Session, degree=2) + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1 |Identity/Network), data=networks, REML = T)
+
+lmer.groupedtraj_global <- lmer(GMV.mean ~ poly(Session, degree=2)*Grouped.Net + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1 |Identity/Network), data=networks, REML = T)
+```
+
+##### Table (export)
+
+```{r table model nested networks}
+summary_nestednet <- as.data.frame(summary(lmer.groupedtraj_global)$coefficients)
+
+rownames <- c("(Intercept)","Session [Linear Term]","Session [Quadratic Term]","Networks [DMN + FP]","eTIV","Age","Euler Number","Inter-Session Time","Networks [DMN + FP] x Session [Linear Term]","Networks [DMN + FP] x Session [Quadratic Term]")
+
+confint_nestednet <- confint(lmer.groupedtraj_global,level = 0.95, method="Wald")
+
+summary_nestednet <- cbind(rownames, summary_nestednet,confint_nestednet[4:nrow(confint_nestednet),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary_nestednet <- summary_nestednet %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary_nestednet) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value","p value", "Sig.")
+
+summary_nestednet <- summary_nestednet %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary_nestednet %>% regulartable() %>% autofit()
+```
+
+```{r table one trajectory}
+summary_onetraj <- as.data.frame(summary(lmer.singletraj_global)$coefficients)
+
+rownames <- c("(Intercept)","Session [Linear Term]","Session [Quadratic Term]","eTIV","Age","Euler Number","Inter-Session Time")
+
+confint_onetraj <- confint(lmer.singletraj_global,level = 0.95, method="Wald")
+
+summary_onetraj <- cbind(rownames, summary_onetraj,confint_onetraj[4:nrow(confint_onetraj),1:2]) %>% select("rownames", "Estimate", "2.5 %", "97.5 %" ,"Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+summary_onetraj <- summary_onetraj %>%
+  mutate(Significance = ifelse(`Pr(>|t|)` < 0.001, "***",
+                    ifelse(`Pr(>|t|)`  < 0.01, "**",
+                    ifelse(`Pr(>|t|)`  < 0.05, "*", "ns"))))
+
+colnames(summary_onetraj) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value","p value", "Sig.")
+
+summary_onetraj <- summary_onetraj %>% 
+  mutate(across(everything(), custom_round_d))
+
+summary_onetraj %>% regulartable() %>% autofit()
+```
+
+### Analysis of variance
+
+##### Global Change
+
+```{r}
+lmer.singletraj_global_RELMF <- lmer(GMV.mean ~ poly(Session, degree=2) + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1 |Identity/Network), data=networks, REML = F)
+
+lmer.groupedtraj_global_RELMF <- lmer(GMV.mean ~ poly(Session, degree=2)*Grouped.Net + etiv_scaled + Age_scaled + Euler_scaled + diftime.RM_scaled + (1 |Identity/Network), data=networks, REML = F)
+
+BIC(lmer.singletraj_global_RELMF)
+BIC(lmer.groupedtraj_global_RELMF)
+```
+
+## **Vertex-wise Changes Location Table**
+
+```{r}
+vertexwise_location <- read.table("Data/vertex-wise/lme_outputs/ChangeLocation_T2GM_location.txt",sep=",",header=T)
+colnames(vertexwise_location) <- c("Region (Desikan-Killiany)","% GM volume change (LH)","% GM volume change (RH)")
+
+vertexwise_location$`% GM volume change (Global)` <- vertexwise_location$`% GM volume change (LH)` + vertexwise_location$`% GM volume change (RH)`
+
+
+vw_table <- vertexwise_location
+vw_table$`% GM volume change (LH)` <- round(vw_table$`% GM volume change (LH)`,1)
+vw_table$`% GM volume change (RH)` <- round(as.numeric(vw_table$`% GM volume change (RH)`),1)
+vw_table$`% GM volume change (Global)` <- round(as.numeric(vw_table$`% GM volume change (Global)`),1)
+
+vw_table <- vw_table %>% filter(`Region (Desikan-Killiany)` != "unknown") %>% arrange(desc(`% GM volume change (Global)`))
+
+vw_table %>% regulartable() %>% autofit()
+```
+
+

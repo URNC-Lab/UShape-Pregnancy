@@ -1,0 +1,185 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-06-05"
+---
+
+```{r install packages, warning=F,include=F}
+env <- new.env() # Create a new environment
+  source("Scripts/RPackages/packages.R", local = env) # Load the packages into the new environment
+
+loaded_packages <- ls(envir = env) # Get the list of loaded packages in the new environment
+
+invisible(lapply(loaded_packages, function(pkg) { # Load the packages that are not already loaded into the global environment
+  if (!(pkg %in% search())) {
+    library(pkg, character.only = TRUE)
+  }
+}))
+```
+
+```{r clear environment first}
+remove(list=ls())
+```
+
+# Set-up
+
+```{r uploading df, warning=F}
+#All graph theory measures have been corrected by those obtained under a null model rewiring.
+GraphTheory_YeoNet_400p_corrected <- read_excel(path= "Data/resting-state/DF_GraphTheory_YeoNetworks_400p_corrected.xlsx")
+Modularity_Louvain_400p_corrected <- read_excel(path= "Data/resting-state/DF_Modularity_WholeBrain_400p_corrected.xlsx")
+```
+
+## Custom functions
+
+```{r}
+custom_round_a <- function(x, column_name) {
+  if (grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.001, format(x, scientific = TRUE, digits = 3), format(round(x, 3))))
+  }
+  if (is.numeric(x) & !grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.005 & x > -0.005, format(round(x, 3)), format(round(x, 2))))
+  }
+  return(x)
+}
+```
+
+# Analyses
+
+## Whole-Brain Modularity
+
+```{r}
+Modularity_Louvain_400p_corrected$Grupo <- factor(Modularity_Louvain_400p_corrected$Grupo, levels=c("nulliparous_women", "gestational_mother","non_gestational_mother"))
+Modularity_Louvain_400p_corrected$Session <- factor(Modularity_Louvain_400p_corrected$Session, levels=c("1", "4","5"))
+```
+
+```{r}
+M400 <- lmer(Modularity ~ Grupo*Session + FWD_sc + Age_sc + diftime.RM_sc + (1|Identity), data=Modularity_Louvain_400p_corrected)
+
+M400_table <- summary(M400)$coefficients
+
+confint_CSF <- confint(M400,level = 0.95)
+
+rownames <- c("(Intercept)", "Group [Gestational Mother]","Group [non-Gestational Mother]", "Session 4", "Session 5","FWD", "Age","Inter-Session Time", "Group [Gestational Mother] x Session 4","Group [non-Gestational Mother] x Session 4","Group [Gestational Mother] x Session 5","Group [non-Gestational Mother] x Session 5")
+
+M400_table <- as.data.frame(cbind(rownames,M400_table,confint_CSF[3:nrow(confint_CSF),]))
+
+M400_table <- M400_table %>% select("rownames","Estimate","2.5 %", "97.5 %","Std. Error","df","t value","Pr(>|t|)") %>% add_column(Significance = NA)
+
+colnames(M400_table) <- c("_","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value","Sig.")
+
+M400_table <- M400_table %>% mutate(across(-c("_"),as.numeric))
+M400_table <- M400_table %>%
+  mutate(`Sig.` = ifelse(`p value` < 0.001, "***",
+                    ifelse(`p value`  < 0.01, "**",
+                    ifelse(`p value`  < 0.05, "*", "ns")))) %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column())))
+
+M400_table %>% regulartable() %>% autofit()
+```
+
+# Network analyses
+
+## Modularity maximization + System Segregation + mean Participation Coefficient
+
+```{r}
+GraphTheory_YeoNet_400p_corrected$Grupo <- factor(GraphTheory_YeoNet_400p_corrected$Grupo, levels=c("nulliparous_women", "gestational_mother","non_gestational_mother"))
+GraphTheory_YeoNet_400p_corrected$Session <- factor(GraphTheory_YeoNet_400p_corrected$Session, levels=c("1", "4","5"))
+```
+
+```{r}
+model_summaries <- list()
+model_table <- list()
+model_confint <- list()
+
+network_lmer <- data.frame(Network=character(), pvalue_unc=numeric(), estimate=numeric(), stringsAsFactors=FALSE)
+
+GraphTheory_YeoNet_400p_corrected$Session <- as.factor(GraphTheory_YeoNet_400p_corrected$Session)
+
+depvariable_names <- c("SS_visual", "SS_somatomotor", "SS_dorsal_attention", "SS_ventral_attention", "SS_limbic", "SS_frontopar", "SS_default",
+                       "MM_visual", "MM_somatomotor", "MM_dorsal_attention", "MM_ventral_attention", "MM_limbic", "MM_frontopar", "MM_default",
+                       "PC_visual", "PC_somatomotor", "PC_dorsal_attention", "PC_ventral_attention", "PC_limbic", "PC_frontopar", "PC_default")
+
+pvalues_df <- data.frame(Network=character(), Term=character(), pvalue_unc=numeric(), estimate=numeric(), stringsAsFactors=FALSE)
+
+for (depvariable in depvariable_names) {
+  
+  # Ensure the dependent variable is numeric
+  if (!is.numeric(GraphTheory_YeoNet_400p_corrected[[depvariable]])) {
+    GraphTheory_YeoNet_400p_corrected[[depvariable]] <- as.numeric(GraphTheory_YeoNet_400p_corrected[[depvariable]])
+  }
+  
+  formula <- as.formula(paste(depvariable, "~ Grupo*Session + FWD_sc + Age_sc + diftime.RM_sc + (1|Identity)"))
+  lmer_model <- lmer(formula, data=GraphTheory_YeoNet_400p_corrected)
+  # Extract p-values and estimates for fixed effects
+  fixed_effects <- summary(lmer_model)$coefficients
+  estimates <- fixed_effects[, "Estimate"]
+  stderror <- fixed_effects[, "Std. Error"]
+  df <- fixed_effects[, "df"]
+  tvalue <- fixed_effects[, "t value"]
+  pvalues <- fixed_effects[, "Pr(>|t|)"]
+  model_confint <- confint(lmer_model,level = 0.95)
+  ci25 <- model_confint[3:nrow(model_confint), "2.5 %"]
+  ci975 <- model_confint[3:nrow(model_confint), "97.5 %"]
+  # Create a temporary data frame to store the results for this model
+  temp_df <- data.frame(Network=depvariable, 
+                        Term=rownames(fixed_effects),
+                        estimate=estimates,
+                        CI25 = ci25,
+                        CI975=ci975,
+                        Std.Error=stderror,
+                        df=df,
+                        tvalue=tvalue,
+                        pvalue_unc=pvalues, 
+                        stringsAsFactors=FALSE)
+  
+  # Append the temporary data frame to the main data frame
+  pvalues_df <- rbind(pvalues_df, temp_df)
+}
+```
+
+```{r}
+custom_round_a <- function(x, column_name) {
+  if (grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.001, "< 0.001", format(round(x, 3))))
+  }
+  if (is.numeric(x) & !grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.005 & x > -0.005, format(round(x, 3)), format(round(x, 2))))
+  }
+  return(x)
+}
+
+pvalues_table <- pvalues_df %>%
+  group_by(Term) %>%
+  mutate(pvalue_fdr = p.adjust(pvalue_unc, method = "fdr"))
+
+pvalues_table <- pvalues_table %>%
+  mutate(Significance = ifelse(pvalue_fdr < 0.001, "***",
+                    ifelse(pvalue_fdr  < 0.01, "**",
+                    ifelse(pvalue_fdr  < 0.05, "*", "ns"))))
+
+
+colnames(pvalues_table) <- c("_","Term","Est.", "CI 2.5%", "CI 97.5%","SE", "df", "t value", "p value","q value","Sig.")
+
+pvalues_table <- pvalues_table %>% mutate(across(-c("_"),as.numeric))
+pvalues_table <- pvalues_table %>%
+  filter(str_detect(Term,":")) %>%
+  mutate(`Sig.` = ifelse(`q value` < 0.001, "***",
+                    ifelse(`q value`  < 0.01, "**",
+                    ifelse(`q value`  < 0.05, "*", "ns")))) %>% 
+  mutate(across(everything(), ~custom_round_a(.x, cur_column()))) %>%
+  separate("_", into = c("Metric", "Network"), sep = "_") %>%
+  mutate(Metric = case_when(Metric == "SS" ~ "System segregation",
+                            Metric == "MM" ~ "Modularity",
+                            Metric == "PC" ~ "mean Participation Coefficient",
+                            Metric == "CS" ~ "Community Structure")) %>%
+  mutate(Term = case_when(Term== "Grupogestational_mother:Session4" ~ "Grupo [Gestational Mother] x Session 4",
+                          Term== "Gruponon_gestational_mother:Session4" ~ "Grupo [non-Gestational Mother] x Session 4",
+                          Term== "Grupogestational_mother:Session5" ~ "Grupo [Gestational Mother] x Session 5",
+                          Term== "Gruponon_gestational_mother:Session5" ~ "Grupo [non-Gestational Mother] x Session 5")) 
+
+
+pvalues_table$Network <- factor(pvalues_table$Network, levels=c("visual","somatomotor","dorsal","ventral","limbic","frontopar","default"), labels=c("Visual Network","Somatomotor Network","Dorsal attention Network","Ventral attention Network","Limbic Network","Frontoparietal Network","Default Network"))
+
+pvalues_table <- as_grouped_data(pvalues_table,c("Metric","Network"))
+pvalues_table %>% regulartable() %>% autofit()
+```

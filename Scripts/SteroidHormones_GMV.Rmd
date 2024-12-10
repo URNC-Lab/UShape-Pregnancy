@@ -1,0 +1,560 @@
+---
+title: "Hormones"
+output:
+  html_document: 
+    highlight: tango
+    theme: paper
+    fig_width: 10
+  pdf_document: default
+  word_document: default
+date: "2023-07-18"
+editor_options:
+  chunk_output_type: inline
+---
+
+# Set-Up
+
+## Loading Packages
+
+```{r install packages, warning=F, include=F}
+env <- new.env() # Create a new environment
+source("Scripts/RPackages/packages.R", local = env) # Load the packages into the new environment
+
+loaded_packages <- ls(envir = env) # Get the list of loaded packages in the new environment
+
+invisible(lapply(loaded_packages, function(pkg) { # Load the packages that are not already loaded into the global environment
+  if (!(pkg %in% search())) {
+    library(pkg, character.only = TRUE)
+  }
+}))
+```
+
+## Loading DF
+```{r}
+A.Hormones <- read_excel(path= "Data/hormones/DF_Hormones.xlsx") #session 1 to 4
+
+hormones_families <- read_excel(path= "Data/hormones/DF_Hormones_Families.xlsx")
+
+hormones_desnsesampling <- read_excel(path= "Data/hormones/DF_Hormones_DenseSampling.xlsx")
+```
+
+```{r}
+A.Hormones$Group <- factor(A.Hormones$Group, levels = c("nulliparous_women", "gestational_mother", "non_gestational_mother"))
+```
+
+# Checking Steroid Hormones Trajectory during pregnancy and postpartum =========
+
+```{r base table with mean and sd per session}
+meanHormones_session <- A.Hormones %>%  
+  filter(Group == "gestational_mother") %>% 
+  select(Session,log_Cortisol_F_corrected:log_E1_G_corrected) %>%
+  tbl_summary(by=Session,statistic = list(all_continuous() ~ "{mean} ({sd})"), digits=all_continuous() ~ 2)
+
+meanHormones_session <- as.data.frame(meanHormones_session)
+  
+colnames(meanHormones_session) <- c("Hormone","Horm. Concentration (Baseline)", "Horm. Concentration (18 prg. weeks)", "Horm. Concentration (32 prg. weeks)","Horm. Concentration (1 month postpartum)")
+```
+
+```{r building the models}
+A.Hormones$Session <- as.numeric(A.Hormones$Session)
+
+loghormones <- colnames(A.Hormones[, grepl("log.*corrected", colnames(A.Hormones))]) #selecting hormones (log and creatinine corrected)
+
+#QUADRATIC MODEL ===============================================================
+summary_list_quadratic <- list()
+
+for (i in 1:length(loghormones)) {
+  formula_str <- paste(loghormones[i], "~ poly(Session, 2) * Group + BMI_sc + Age_sc + Diftime_sc + (1 | Identity)")
+  model <- lmer(data = A.Hormones, formula = as.formula(formula_str))
+  summary_list_quadratic[[loghormones[i]]] <- summary(model)
+}
+
+#LINEAR MODEL ==================================================================
+summary_list_linear <- list()
+
+for (i in 1:length(loghormones)) {
+  formula_str <- paste(loghormones[i], "~ Session * Group + BMI_sc + Age_sc + Diftime_sc + (1 | Identity)")
+  model <- lmer(data = A.Hormones, formula = as.formula(formula_str))
+  summary_list_linear[[loghormones[i]]] <- summary(model)
+}
+
+hormones_families_1 <- hormones_families %>%
+  mutate(Hormone = paste0("log_",Hormone,"_corrected"))
+```
+## Quadratic Trajectory (Gest Mothers group)
+
+```{r gestational_mother quad}
+significant_loghormones <- c()
+non_significant_loghormones <- c()
+trajectory_df_GMq <- data.frame(Hormone=character(), pvalue= numeric(), stringsAsFactors = F)
+
+
+for (i in 1:length(loghormones)) {
+  interaction_p_value <- summary_list_quadratic[[loghormones[i]]]$coefficients["poly(Session, 2)2:Groupgestational_mother","Pr(>|t|)"]
+  interaction_estimate <- summary_list_quadratic[[loghormones[i]]]$coefficients["poly(Session, 2)2:Groupgestational_mother","Estimate"]
+  trajectory_df_GMq <- rbind(trajectory_df_GMq, data.frame(Hormone = loghormones[i], pvalue = interaction_p_value, Estimate= interaction_estimate))
+}
+
+trajectory_df_GMq <- merge(trajectory_df_GMq,hormones_families_1, by="Hormone",all=T)
+trajectory_df_GMq$SteroidFamily <- factor(trajectory_df_GMq$SteroidFamily, levels = c("ESTROGENS","PROGESTOGENS","CORTICOIDS","ANDROGENS"),ordered=T)
+
+trajectory_df_GMq_1 <- merge(trajectory_df_GMq,meanHormones_session,by="Hormone")
+
+trajectory_df_GMq_1 <- trajectory_df_GMq_1 %>%
+  group_by(SteroidFamily) %>%
+  mutate(Significance_FDR = p.adjust(pvalue,method="fdr")) %>%
+  ungroup() %>%
+  select(SteroidFamily,Compound,`Horm. Concentration (Baseline)`:`Horm. Concentration (1 month postpartum)`,Estimate,pvalue, Significance_FDR)
+
+trajectory_df_GMq_1 <- trajectory_df_GMq_1 %>%
+  mutate(Significance = ifelse(Significance_FDR < 0.001, "***",
+                    ifelse(Significance_FDR  < 0.01, "**",
+                    ifelse(Significance_FDR  < 0.05, "*", "ns"))))
+
+colnames(trajectory_df_GMq_1) <- c("Steroid Family","Metabolite", "Horm. Concentration (Baseline)", "Horm. Concentration (18 prg. weeks)","Horm. Concentration (32 prg. weeks)", "Horm. Concentration (1 month postpartum)", "Est.", "p value" , "q value", "Sig.")
+
+custom_round <- function(x, column_name) {
+  if (grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.001, format(x, scientific = TRUE, digits = 3), format(round(x, 3))))
+  }
+  if (is.numeric(x) & !grepl("p value|q value", column_name)) {
+    return(ifelse(x < 0.005 & x > -0.005, format(round(x, 3)), format(round(x, 2))))
+  }
+  return(x)
+}
+trajectory_df_GMq_1 <- trajectory_df_GMq_1 %>% arrange(`Steroid Family`,`q value`)
+trajectory_df_GMq_1 <- trajectory_df_GMq_1 %>% 
+  mutate(across(everything(), ~custom_round(.x, cur_column())))
+
+trajectory_df_GMq_1fin <- as_grouped_data(trajectory_df_GMq_1,"Steroid Family")
+
+trajectory_df_GMq_1fin %>% regulartable()
+```
+
+# Multimodal Analysis ==========================================================
+
+```{r merging brain and A.Hormones df, include = F}
+A.Hormones_GM <- A.Hormones %>% filter(Group == "gestational_mother")
+```
+
+## Correlation between quadratic trajectories
+
+### cortical gray matter volume model
+
+```{r}
+gmv_lmer <- lmer(PChange.Cortvol.Global ~ poly(Session,2) + (poly(Session,2)|Identity), data=A.Hormones_GM)
+
+rancoef_gmv <- (ranef(gmv_lmer)$Identity) #*-1 #random coefficient gmv
+```
+
+### Hormonal models
+
+```{r}
+trajectory_df_GMq_plot <- trajectory_df_GMq %>%
+  group_by(SteroidFamily) %>%
+  mutate(Significance_FDR = p.adjust(pvalue,method="fdr")) %>%
+  ungroup() %>%
+  mutate(Trajectory = ifelse(Significance_FDR < 0.05,"quadratic","ns"),
+         Curve = ifelse(Significance_FDR > 0.05, NA, ifelse(Estimate > 0, "U-Shape", "Inverse U-Shape")))  %>%
+  #filter(Trajectory=="quadratic") %>%
+  select(Hormone, Compound,SteroidFamily, Trajectory,Significance_FDR) %>%
+  mutate(SteroidFamily= factor(SteroidFamily,levels = c("ESTROGENS","PROGESTOGENS","CORTICOIDS","ANDROGENS"))) %>%
+  mutate(Compound = ifelse(Trajectory == "quadratic",paste0(Compound," *"), Compound))%>%
+  arrange(SteroidFamily,Significance_FDR)
+```
+
+#### Estrogens
+
+```{r}
+estrogens <- trajectory_df_GMq_plot %>%
+  filter(SteroidFamily == "ESTROGENS") %>%
+  filter(Trajectory == "quadratic")
+
+model_summaries <- list()
+estrogen_cortest <- data.frame(Hormone= character(), pvalue_unc=numeric(), estimate=numeric(), stringsAsFactors = F)
+
+for (i in 1:length(estrogens$Hormone)) {
+  estrogen <- estrogens$Hormone[i]
+  formula <- as.formula(paste(estrogen, "~ poly(Session,2) + (poly(Session,2) | Identity)"))  
+  hormones_lmer <- lmer(formula, data=A.Hormones_GM)
+  model_summaries[[estrogen]] <- summary(hormones_lmer)
+  
+  rancoef_hormones <- ranef(hormones_lmer)$Identity #random coefficient hormones
+  cortest <- cor.test(rancoef_gmv$`poly(Session, 2)2`, rancoef_hormones$`poly(Session, 2)2`, method = "spearman",alternative="two.sided") #significant
+  estrogen_cortest <- rbind(estrogen_cortest, data.frame(Hormone = estrogen, pvalue_unc = cortest$p.value, estimate = cortest$estimate))
+}
+
+estrogen_cortest <- estrogen_cortest %>% mutate(pvalue_FDR = p.adjust(pvalue_unc,method="fdr"),
+                                                Significance = ifelse(pvalue_FDR < 0.001, "***",
+                                                                      ifelse(pvalue_FDR  < 0.01, "**",
+                                                                             ifelse(pvalue_FDR  < 0.05, "*", "ns")))) %>%
+                      arrange(pvalue_FDR)%>%
+                      add_column(`Steroid Family` = "Estrogens")
+estrogen_cortest
+```
+
+#### Progestagens
+
+```{r}
+progestogens <- trajectory_df_GMq_plot %>%
+  filter(SteroidFamily == "PROGESTOGENS") %>%
+  filter(Trajectory == "quadratic")
+
+progestogen_cortest <- data.frame(Hormone= character(), pvalue_unc=numeric(), estimate=numeric(), stringsAsFactors = F)
+
+for (i in 1:length(progestogens$Hormone)) {
+  progestogen <- progestogens$Hormone[i]
+  formula <- as.formula(paste(progestogen, "~ poly(Session,2) + (poly(Session,2) | Identity)"))  
+  hormones_lmer <- lmer(formula, data=A.Hormones_GM)
+  
+  rancoef_hormones <- ranef(hormones_lmer)$Identity #random coefficient hormones
+  cortest <- cor.test(rancoef_gmv$`poly(Session, 2)2`, rancoef_hormones$`poly(Session, 2)2`, method = "spearman",alternative="two.sided") #significant
+  progestogen_cortest <- rbind(progestogen_cortest, data.frame(Hormone = progestogen, pvalue_unc = cortest$p.value, estimate = cortest$estimate))
+}
+
+progestogen_cortest <- progestogen_cortest %>% mutate(pvalue_FDR = p.adjust(pvalue_unc,method="fdr"),
+                                                Significance = ifelse(pvalue_FDR < 0.001, "***",
+                                                                      ifelse(pvalue_FDR  < 0.01, "**",
+                                                                             ifelse(pvalue_FDR  < 0.05, "*", "ns")))) %>%
+  arrange(pvalue_FDR) %>%
+  add_column(`Steroid Family` = "Progestogens")
+
+if (any(!is.na(progestogen_cortest$significance))) {
+  print(progestogen_cortest)
+  } else {
+  print("No significant correlations")
+    }
+```
+
+#### Corticoids
+
+```{r}
+corticoids <- trajectory_df_GMq_plot %>%
+  filter(SteroidFamily == "CORTICOIDS") %>%
+  filter(Trajectory == "quadratic")
+
+corticoid_cortest <- data.frame(Hormone= character(), pvalue_unc=numeric(), estimate=numeric(), stringsAsFactors = F)
+
+for (i in 1:length(corticoids$Hormone)) {
+  corticoid <- corticoids$Hormone[i]
+  formula <- as.formula(paste(corticoid, "~ poly(Session,2) + (poly(Session,2) | Identity)"))  
+  hormones_lmer <- lmer(formula, data=A.Hormones_GM)
+  
+  rancoef_hormones <- ranef(hormones_lmer)$Identity #random coefficient hormones
+  cortest <- cor.test(rancoef_gmv$`poly(Session, 2)2`, rancoef_hormones$`poly(Session, 2)2`, method = "spearman",alternative="two.sided") #significant
+  corticoid_cortest <- rbind(corticoid_cortest, data.frame(Hormone = corticoid, pvalue_unc = cortest$p.value, estimate = cortest$estimate))
+}
+
+corticoid_cortest <- corticoid_cortest %>% mutate(pvalue_FDR = p.adjust(pvalue_unc,method="fdr"),
+                                                Significance = ifelse(pvalue_FDR < 0.001, "***",
+                                                                      ifelse(pvalue_FDR  < 0.01, "**",
+                                                                             ifelse(pvalue_FDR  < 0.05, "*", "ns")))) %>%
+  arrange(pvalue_FDR) %>%
+  add_column(`Steroid Family` = "Corticoids")
+
+if (any(!is.na(corticoid_cortest$significance))) {
+  print(corticoid_cortest)
+  } else {
+  print("No significant correlations")
+    }
+```
+
+#### Androgens
+
+```{r}
+androgens <- trajectory_df_GMq_plot %>%
+  filter(SteroidFamily == "ANDROGENS") %>%
+  filter(Trajectory == "quadratic")
+
+androgen_cortest <- data.frame(Hormone= character(), pvalue_unc=numeric(), estimate=numeric(), stringsAsFactors = F)
+
+for (i in 1:length(androgens$Hormone)) {
+  androgen <- androgens$Hormone[i]
+  formula <- as.formula(paste(androgen, "~ poly(Session,2) + (poly(Session,2) | Identity)"))  
+  hormones_lmer <- lmer(formula, data=A.Hormones_GM)
+  
+  rancoef_hormones <- ranef(hormones_lmer)$Identity #random coefficient hormones
+  cortest <- cor.test(rancoef_gmv$`poly(Session, 2)2`, rancoef_hormones$`poly(Session, 2)2`, method = "spearman",alternative="two.sided") #significant
+  androgen_cortest <- rbind(androgen_cortest, data.frame(Hormone = androgen, pvalue_unc = cortest$p.value, estimate = cortest$estimate))
+}
+
+androgen_cortest <- androgen_cortest %>% mutate(pvalue_FDR = p.adjust(pvalue_unc,method="fdr"),
+                                                Significance = ifelse(pvalue_FDR < 0.001, "***",
+                                                                      ifelse(pvalue_FDR  < 0.01, "**",
+                                                                             ifelse(pvalue_FDR  < 0.05, "*", "ns")))) %>%
+  arrange(pvalue_FDR) %>%
+  add_column(`Steroid Family` = "Androgens")
+
+if (any(!is.na(androgen_cortest$significance))) {
+  print(androgen_cortest)
+  } else {
+  print("No significant correlations")
+    }
+```
+
+## Results table
+
+```{r}
+hormonal_correlations <- rbind(estrogen_cortest,progestogen_cortest,corticoid_cortest,androgen_cortest)
+
+hormonal_correlations$`Steroid Family` <- factor(hormonal_correlations$`Steroid Family`, levels = c("Estrogens","Progestogens","Corticoids","Androgens"),ordered=T)
+
+hormonal_correlations <- merge(hormonal_correlations,hormones_families_1 %>% select(Hormone,Compound), by="Hormone") %>%
+  select(`Steroid Family`,Compound, estimate, pvalue_unc, pvalue_FDR, Significance) %>% arrange(`Steroid Family`,pvalue_FDR)
+
+colnames(hormonal_correlations) <- c("Steroid Family", "Compound", "Correlation Coefficient","p value", "q value","Sig.")
+
+custom_round <- function(x) {
+  if (grepl("value", cur_column())) {
+    return(ifelse(x < 0.001,format(x, scientific = TRUE, digits = 3), format(round(x, 3))))
+  }
+  if (is.numeric(x)) {
+    return(round(x, 2))
+  }
+  return(x)
+}
+
+# EXPORT TABLE
+hormonal_correlations <- hormonal_correlations %>% 
+  mutate(across(everything(), custom_round))
+
+hormonal_correlations_table <- as_grouped_data(hormonal_correlations,"Steroid Family")
+hormonal_correlations_table %>% regulartable() %>% autofit()
+```
+
+# Figures ========================================================================
+
+## Boxplots (Supplementary figures S6 to S9)
+
+```{r first visualization log transformed, fig.height=15, fig.width=20}
+A.Hormones$Session1 <- c(-1, 18, 34, 43)[match(A.Hormones$Session, c(1, 2, 3, 4))] #adjust to real means
+custom_labels <- c("Baseline","18 PW","34 PW", "1 MPP")
+custom_braks <- c(-1, 18, 34, 43, 63)
+
+loghormones <- trajectory_df_GMq_plot
+loghormones_h <- loghormones$Hormone
+
+# A.Hormones$Session <- as.factor(A.Hormones$Session1)
+
+ggplot_list <- lapply(loghormones_h, function(variable_name) {
+  compound_name <- loghormones$Compound[loghormones$Hormone == variable_name]
+  steroid_family <- loghormones$SteroidFamily[loghormones$Hormone == variable_name]
+  
+  # Define colors based on steroid_family
+  fill_color <- case_when(
+    steroid_family == "ANDROGENS" ~ "#F8766D",
+    steroid_family == "ESTROGENS" ~ "#7CAE00",
+    steroid_family == "PROGESTOGENS" ~ "#00BFC4",
+    steroid_family == "CORTICOIDS" ~ "#C77CFF")
+  line_color <- case_when(
+    steroid_family == "ANDROGENS" ~ "#F8766D",
+    steroid_family == "ESTROGENS" ~ "#7CAE00",
+    steroid_family == "PROGESTOGENS" ~ "#00BFC4",
+    steroid_family == "CORTICOIDS" ~ "#C77CFF") 
+  
+    A.Hormones %>%
+    filter(Group=="gestational_mother")%>%
+    ggplot(aes(x = Session1, y = .data[[variable_name]], color = Group)) + #fill = Group
+    geom_rect(aes(xmin = 0, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.01) +
+    geom_jitter(size = 2, alpha = 0.2) +
+    stat_summary(geom = "errorbar", fun.data = mean_cl_normal, width = 0.2, size = 1.2) +
+    stat_summary(geom = "line", fun.data = mean_cl_normal, size = 1.2, lineend = "round", alpha = 0.7) +
+    stat_summary(geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1) +
+  # scale_fill_brewer(palette = "Set2", labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+  # scale_color_brewer(palette = "Set2",labels = c("Nulliparous Women", "Gestational Mothers", "Non Gestational Mothers")) +
+    scale_fill_manual(values = fill_color) +
+    scale_color_manual(values = line_color) +
+    scale_x_continuous(breaks = c(-1, 18, 36, 44), labels = custom_labels) +
+    labs(title = compound_name,) +  # Set the title to the variable name
+    theme_minimal() +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(axis.line = element_line(size = 0.5, color = "black")) +
+    theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+    theme(axis.text=element_text(size=15))+
+    theme(axis.title.y=element_text(size=15),
+          plot.title = element_text(size=15))+
+    theme(legend.position ="none")+
+    ylab("Logarithmic Concentration (ng/mL)")+
+    guides(color=F)
+})
+
+combined_plot_1 <- ggarrange(plotlist = ggplot_list[1:6], nrow=2, ncol=3, common.legend=T,legend=NULL)
+combined_plot_1
+combined_plot_2 <- ggarrange(plotlist = ggplot_list[7:18], nrow=4, ncol=3, common.legend=T,legend=NULL)
+combined_plot_2
+combined_plot_3 <- ggarrange(plotlist = ggplot_list[19:37], nrow=5, ncol=4, common.legend=T,legend=NULL)
+combined_plot_3
+combined_plot_4 <- ggarrange(plotlist = ggplot_list[38:49], nrow=4, ncol=3, common.legend=T,legend=NULL)
+combined_plot_4
+```
+
+## Brain-Hormone correlation plots
+
+```{r Fig 3B left}
+#fig.height=8, fig.width=9
+gmv_lmer <- lmer(PChange.Cortvol.Global ~ poly(Session,2) + (poly(Session,2)|Identity), data=A.Hormones_GM)
+rancoef_gmv <- (ranef(gmv_lmer)$Identity) #random coefficient gmv
+
+hormones_lmerE33S <- lmer(log_E3_3S_corrected ~ poly(Session, 2) + (poly(Session, 2) | Identity), data=A.Hormones_GM)
+rancoef_hormones_E33S <- ranef(hormones_lmerE33S)$Identity #random coefficient hormones
+
+a <- as.data.frame(cbind(rancoef_gmv$`poly(Session, 2)2`, rancoef_hormones_E33S$`poly(Session, 2)2`))
+
+colnames(a) <- c("GMV_QCoef","E3_3S_QCoef")
+
+
+ggplo1 <- ggplot(a, aes(E3_3S_QCoef,GMV_QCoef)) +
+  geom_point(size=1.5, alpha=0.9) +
+  geom_smooth(method='lm',color="#99cc33") +
+  ylab("% GM volume change (quadratic parameter coefficient)") +
+  xlab("Estriol 3-sulfate (quadratic parameter coefficient)")+
+  theme_modern()+
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.title.x = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))+
+  theme(axis.ticks = element_line())
+ggplo1
+```
+
+```{r Fig 3B right}
+#fig.height=7, fig.width=9
+hormones_lmerE1S <- lmer(log_E1_S_corrected ~ poly(Session, 2) + (poly(Session, 2) | Identity), data=A.Hormones_GM)
+rancoef_hormones_E1S <- ranef(hormones_lmerE1S)$Identity #random coefficient hormones
+
+a <- as.data.frame(cbind(rancoef_gmv$`poly(Session, 2)2`, rancoef_hormones_E1S$`poly(Session, 2)2`))
+colnames(a) <- c("GMV_QCoef","E1_S_QCoef")
+
+
+ggplo2 <- ggplot(a, aes(E1_S_QCoef,GMV_QCoef)) +
+  geom_point(size=1.5, alpha=0.9) +
+  geom_smooth(method='lm',color="#009933")+
+  ylab("% GM volume change (quadratic parameter coefficient)") +
+  xlab("Estrone sulfate (quadratic parameter coefficient)")+
+  theme_modern()+
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.title.x = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))+
+  theme(axis.ticks = element_line())
+ggplo2
+```
+
+```{r}
+A.Hormones_GM$Session1 <- c(-1, 18, 34, 43)[match(A.Hormones_GM$Session, c(1, 2, 3, 4))] #adjust to real means
+filtered_data <- A.Hormones_GM[A.Hormones_GM$Session1 %in% c(18, 34, 43), ]
+custom_labels <- c("Pre-Pregnancy","18 pregnancy\nweeks","34 pregnancy\nweeks", "1 month\npostpartum","6 months\npostpartum")
+custom_braks <- c(-1, 18, 34, 43)
+```
+
+
+```{r Calculating % relative to the maximum value}
+A.Hormones_GM <- A.Hormones_GM %>%
+  group_by(Identity) %>%
+  mutate(E3_3S_corrected_LowestValue = min(log_E3_3S_corrected), E3_3S_corrected_HighestValue = max(log_E3_3S_corrected)) %>%
+  mutate(E3_3S_corrected_Percentage_Change = ((log_E3_3S_corrected-E3_3S_corrected_LowestValue)/(E3_3S_corrected_HighestValue-E3_3S_corrected_LowestValue))* 100) %>%
+  mutate(E1_S_corrected_LowestValue = min(log_E1_S_corrected), E1_S_corrected_HighestValue = max(log_E1_S_corrected)) %>%
+  mutate(E1_S_corrected_Percentage_Change = ((log_E1_S_corrected-E1_S_corrected_LowestValue)/(E1_S_corrected_HighestValue-E1_S_corrected_LowestValue))* 100)
+```
+
+```{r Fig 3A}
+coef <-  10
+coef1 <- 2
+
+FIg3A <- ggplot(data = A.Hormones_GM, aes(x = Session1)) +
+  geom_rect(aes(xmin = 0, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.01) +
+  stat_summary(aes(y=PChange.Cortvol.Global*coef1, color="GM Volume"), geom = "line", fun.data = mean_cl_normal, linejoin = "round", size = 1.2, alpha = 0.7) +
+  stat_summary(aes(y=PChange.Cortvol.Global*coef1,color="GM Volume"), geom = "errorbar", fun.data = mean_cl_normal, width = 1.2, size = 1.2, alpha = 0.7) +
+  stat_summary(aes(y=PChange.Cortvol.Global*coef1), geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1,ccolor="black") +
+  stat_summary(aes(y=E3_3S_corrected_Percentage_Change/coef,color="estriol 3-sulfate"),geom = "line", fun.data = mean_cl_normal, size = 1.2, linejoin = "round", alpha = 0.7) +
+  stat_summary(aes(y=E3_3S_corrected_Percentage_Change/coef,color="estriol 3-sulfate"),geom = "errorbar", fun.data = mean_cl_normal, width = 1.2, size = 1.2, alpha = 0.7) +
+  stat_summary(aes(y=E3_3S_corrected_Percentage_Change/coef,color="estriol 3-sulfate"),geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1 ,color="black") +
+  stat_summary(aes(y=E1_S_corrected_Percentage_Change/coef,color="estrone sulfate"),geom = "line", fun.data = mean_cl_normal, size = 1.2, linejoin = "round", alpha = 0.7) +
+  stat_summary(aes(y=E1_S_corrected_Percentage_Change/coef,color="estrone sulfate"),geom = "errorbar", fun.data = mean_cl_normal, width = 1.2, size = 1.2, alpha = 0.7) +
+  stat_summary(aes(y=E1_S_corrected_Percentage_Change/coef,color="estrone sulfate"),geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1,color="black") +
+  scale_y_continuous(name="% Change in Gray Matter Volume", labels = c("-10" = "-5", "-5" = "-2.5", "0" = "0","5" = "", "10" = ""),
+                     sec.axis=sec_axis(~.*coef,name="Relative levels of Estrogens (% of max)", labels=c("-100" = "", "-50" = "", "0" = " min (0%)","50" = "50%", "100" = "max (100%)")))+
+  scale_x_continuous(breaks = c(-1, 18, 36, 44, 64), labels = custom_labels) +
+  scale_color_manual(name="",values = c("GM Volume" = "coral","estriol 3-sulfate"="#99cc33","estrone sulfate" = "#009933"))+
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(size = 0.5, color = "black")) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.title.y = element_text(colour = "coral")) +  # Set primary y-axis color to coral
+  theme(axis.title.y.right = element_text(colour = "#339933")) +  # Set secondary y-axis color to aquamarine2
+  theme(legend.position = "bottom",legend.text=element_text(size=7)) +
+  theme(axis.ticks.x = element_line()) +
+  theme(axis.title.y = element_text(size=7)) +
+  theme(axis.text=element_text(size=7))
+  
+
+FIg3A
+
+```
+## Correspondance with dense sampling hormonal acquisitions
+
+```{r}
+hormones_general <- A.Hormones_GM %>% mutate(Session = case_when(Session=="1" ~ "0", Session=="2" ~ "18", Session=="3" ~ "34", Session=="4" ~ "43"))
+```
+
+```{r}
+hormones_desnsesampling$Pregnancy_Week <- as.numeric(hormones_desnsesampling$Pregnancy_Week)
+hormones_general$Session <- as.numeric(hormones_general$Session)
+
+e1s_ds <- ggplot() +
+  geom_rect(aes(xmin = 3, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.1) +
+    stat_summary(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E1_S_corrected), geom = "errorbar", fun.data = mean_cl_normal, width = 0.2, size = 1.2, color = "#cccccc") +
+    stat_summary(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E1_S_corrected), geom = "line", fun.data = mean_cl_normal, size = 1.2, lineend = "round", alpha = 0.7, group=1, color = "#cccccc") +
+    stat_summary(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E1_S_corrected), geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1, color = "#333333") +
+      geom_jitter(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E1_S_corrected), width = 0.2, height = 0.2, size = 2, alpha = 0.7, color = "#666666") +
+    geom_jitter(data=hormones_general, aes(x=Session, y = log_E1_S_corrected), width = 0.3, height = 0.2, size = 2, alpha = 0.2, color = "#009933") +
+    stat_summary(data=hormones_general, aes(x=Session, y = log_E1_S_corrected), geom = "errorbar", fun.data = mean_cl_normal, width = 0.2, size = 1.2, color = "#009933") +
+    stat_summary(data=hormones_general, aes(x=Session, y = log_E1_S_corrected), geom = "line", fun.data = mean_cl_normal, size = 1.2, lineend = "round", alpha = 0.7, group=1, color = "#009933") +
+    stat_summary(data=hormones_general, aes(x=Session, y = log_E1_S_corrected), geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1, color = "#333333") +
+    theme_minimal() +
+    labs(title = "Estrone sulfate") + 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(axis.line = element_line(size = 0.5, color = "black")) +
+    theme(legend.title = element_blank()) +
+    theme(axis.text=element_text(size=7)) +
+    theme(axis.title.y=element_text(size=7),
+          axis.title.x=element_blank(),
+          plot.title = element_text(size=7)) +
+  theme(axis.ticks = element_line())+
+    theme(legend.position ="none") +
+    ylab("Logarithmic Concentration (ng/mL)") +
+  scale_x_continuous(breaks=c(0,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,30,42,44))+
+    guides(color=F) +
+    scale_color_manual(values = c("#cccccc", "#009933"))
+
+e1s_ds
+```
+
+```{r}
+e33s_ds <- ggplot() +
+  geom_rect(aes(xmin = 3, xmax = 40, ymin = -Inf, ymax = Inf), fill = "gray80", color = "white", alpha = 0.1) +
+    stat_summary(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E3_3S_corrected), geom = "errorbar", fun.data = mean_cl_normal, width = 0.2, size = 1.2, color = "#cccccc") +
+    stat_summary(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E3_3S_corrected), geom = "line", fun.data = mean_cl_normal, size = 1.2, lineend = "round", alpha = 0.7, group=1, color = "#cccccc") +
+    stat_summary(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E3_3S_corrected), geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1, color = "#333333") +
+      geom_jitter(data=hormones_desnsesampling, aes(x=Pregnancy_Week, y = log_E3_3S_corrected), width = 0.2, height = 0.2, size = 2, alpha = 0.7, color = "#666666") +
+    geom_jitter(data=hormones_general, aes(x=Session, y = log_E3_3S_corrected), width = 0.3, height = 0.2, size = 2, alpha = 0.2, color = "#99cc33") +
+    stat_summary(data=hormones_general, aes(x=Session, y = log_E3_3S_corrected), geom = "errorbar", fun.data = mean_cl_normal, width = 0.2, size = 1.2, color = "#99cc33") +
+    stat_summary(data=hormones_general, aes(x=Session, y = log_E3_3S_corrected), geom = "line", fun.data = mean_cl_normal, size = 1.2, lineend = "round", alpha = 0.7, group=1, color = "#99cc33") +
+    stat_summary(data=hormones_general, aes(x=Session, y = log_E3_3S_corrected), geom = "point", fun.data = mean_cl_normal, size = 2, alpha = 1, color = "#333333") +
+    theme_minimal() +
+    labs(title = "Estriol 3-sulfate") + 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(axis.line = element_line(size = 0.5, color = "black")) +
+    theme(legend.title = element_blank()) +
+    theme(axis.text=element_text(size=7)) +
+    theme(axis.title.y=element_text(size=7),
+          axis.title.x=element_blank(),
+          plot.title = element_text(size=7)) +
+  theme(axis.ticks = element_line())+
+    theme(legend.position ="none") +
+    ylab("Logarithmic Concentration (ng/mL)") +
+  scale_x_continuous(breaks=c(0,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,30,42,44))+
+    guides(color=F) +
+    scale_color_manual(values = c("#cccccc", "#99cc33"))
+e33s_ds
+
+```
+

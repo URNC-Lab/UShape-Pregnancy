@@ -1,0 +1,220 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-10-24"
+---
+
+```{r}
+env <- new.env() # Create a new environment
+source("Scripts/RPackages/packages.R", local = env) # Load the packages into the new environment
+
+loaded_packages <- ls(envir = env) # Get the list of loaded packages in the new environment
+
+invisible(lapply(loaded_packages, function(pkg) { # Load the packages that are not already loaded into the global environment
+  if (!(pkg %in% search())) {
+    library(pkg, character.only = TRUE)
+  }
+}))
+```
+
+```{r}
+subjects_dir = file.path("Data/"); #?????
+# subjects_dir = file.path("//folder.imim.es/Neuroimatge1/BeMother/derivatives/freesurfer_long/"); #?????
+subject_id = 'fsaverage';
+```
+
+```{r}
+close3d()
+```
+
+# QUADRATIC TERM
+
+## Gestational Mothers vs Nullip
+
+```{r p corrected}
+pcor_T2GM <- read.table("Data/vertex-wise/lme_outputs/pcor/pcorT2GM_EAEnMHdifT_FDR.txt", header=F)
+pcor_T2GM <- pcor_T2GM$V1
+```
+
+### Volume - Partial Eta Sq
+
+#### Brains Fig 1B
+
+```{r}
+volume_lh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/lh/petasq_T2GM_volume_EAEnMHdifT_lh_FDR.mgz"))
+volume_rh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/rh/petasq_T2GM_volume_EAEnMHdifT_rh_FDR.mgz"))
+```
+
+```{r}
+mkc = list('n'=50L, 'colFn'=colorRamps::blue2red,'range'=c(-0.14,0.14),'symm' = T);
+
+colordmeshes <- vis.data.on.fsaverage(
+  subjects_dir,
+  subject_id,
+  volume_lh_peta,
+  volume_rh_peta,
+  surface = "inflated",
+  bg = "sulc",
+  makecmap_options = mkc,
+  draw_colorbar = TRUE,
+  views = "t4"
+)
+```
+
+#### Brains Fig 2C
+
+```{r}
+volume_lh_peta_006 <- volume_lh_peta 
+volume_rh_peta_006 <- volume_rh_peta
+
+volume_lh_peta_006[abs(volume_lh_peta_006) < 0.06 ] <- NA
+volume_rh_peta_006[abs(volume_rh_peta_006) < 0.06 ] <- NA
+```
+
+```{r}
+mkc = list('n'=50L, 'colFn'=colorRamps::blue2red,'range'=c(-0.14,0.14),'symm' = T);
+
+colordmeshes <- vis.data.on.fsaverage(
+  subjects_dir,
+  subject_id,
+  volume_lh_peta_006,
+  volume_rh_peta_006,
+  surface = "inflated",
+  bg = "sulc",
+  makecmap_options = mkc,
+  draw_colorbar = TRUE,
+  views = "t4"
+)
+```
+
+### Thickness - Partial Eta Sq
+
+#### Brains Fig 1B
+
+```{r}
+thickness_lh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/lh/petasq_T2GM_thickness_EAEnMHdifT_lh_FDR.mgz"))
+thickness_rh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/rh/petasq_T2GM_thickness_EAEnMHdifT_rh_FDR.mgz"))
+```
+
+```{r}
+mkc = list('n'=50L, 'colFn'=colorRamps::blue2red,'range'=c(-0.14,0.14),'symm' = T);
+
+colordmeshes <- vis.data.on.fsaverage(
+  subjects_dir,
+  subject_id,
+  thickness_lh_peta,
+  thickness_rh_peta,
+  surface = "inflated",
+  bg = "sulc",
+  makecmap_options = mkc,
+  draw_colorbar = TRUE,
+  views = "t4"
+)
+```
+
+### Area - Partial Eta Sq
+
+#### Brains Fig 1B
+
+```{r}
+area_lh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/lh/petasq_T2GM_area_EAEnMHdifT_lh_FDR.mgz"))
+area_rh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/rh/petasq_T2GM_area_EAEnMHdifT_rh_FDR.mgz"))
+```
+
+```{r}
+mkc = list('n'=50L, 'colFn'=colorRamps::blue2red,'range'=c(-0.14,0.14),'symm' = T);
+
+colordmeshes <- vis.data.on.fsaverage(
+  subjects_dir,
+  subject_id,
+  area_lh_peta,
+  area_rh_peta,
+  surface = "inflated",
+  bg = "sulc",
+  makecmap_options = mkc,
+  draw_colorbar = TRUE,
+  views = "t4"
+)
+```
+
+## Gestational Mothers vs non-Gestational Mothers
+
+```{r p corrected}
+pcor_T2GM_nGM <- read.table("Data/vertex-wise/lme_outputs/pcor/pcorT2nGM-GM_EAEnMHdifT_FDR.txt", header=F)
+pcor_T2GM_nGM <- pcor_T2GM_nGM$V1
+```
+
+### Volume - Partial Eta Sq
+
+#### Brains Fig 1B
+
+```{r}
+volume_lh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/lh/petasq_T2nGM-GM_volume_EAEnMHdifT_lh_FDR.mgz"))
+volume_rh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/rh/petasq_T2nGM-GM_volume_EAEnMHdifT_rh_FDR.mgz"))
+```
+
+```{r}
+mkc = list('n'=50L, 'colFn'=colorRamps::blue2red,'range'=c(-0.14,0.14),'symm' = T);
+
+colordmeshes <- vis.data.on.fsaverage(
+  subjects_dir,
+  subject_id,
+  volume_lh_peta,
+  volume_rh_peta,
+  surface = "inflated",
+  bg = "sulc",
+  makecmap_options = mkc,
+  draw_colorbar = TRUE,
+  views = "t4"
+)
+```
+
+### Thickness - Partial Eta Sq
+
+#### Brains Fig 1B
+
+```{r}
+thickness_lh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/lh/petasq_T2nGM-GM_thickness_EAEnMHdifT_lh_FDR.mgz"))
+thickness_rh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/rh/petasq_T2nGM-GM_thickness_EAEnMHdifT_rh_FDR.mgz"))
+```
+
+```{r}
+mkc = list('n'=50L, 'colFn'=colorRamps::blue2red,'range'=c(-0.14,0.14),'symm' = T);
+
+colordmeshes <- vis.data.on.fsaverage(
+  subjects_dir,
+  subject_id,
+  thickness_lh_peta,
+  thickness_rh_peta,
+  surface = "inflated",
+  bg = "sulc",
+  makecmap_options = mkc,
+  draw_colorbar = TRUE,
+  views = "t4"
+)
+```
+
+### Area - Partial Eta Sq
+
+#### Brains Fig 1B
+
+```{r}
+area_lh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/lh/petasq_T2nGM-GM_area_EAEnMHdifT_lh_FDR.mgz"))
+area_rh_peta <- read.fs.morph(file.path("Data/vertex-wise/lme_outputs/petamaps/rh/petasq_T2nGM-GM_area_EAEnMHdifT_rh_FDR.mgz"))
+```
+
+```{r}
+mkc = list('n'=50L, 'colFn'=colorRamps::blue2red,'range'=c(-0.14,0.14),'symm' = T);
+
+colordmeshes <- vis.data.on.fsaverage(
+  subjects_dir,
+  subject_id,
+  area_lh_peta,
+  area_rh_peta,
+  surface = "inflated",
+  bg = "sulc",
+  makecmap_options = mkc,
+  draw_colorbar = TRUE,
+  views = "t4"
+)
+```
